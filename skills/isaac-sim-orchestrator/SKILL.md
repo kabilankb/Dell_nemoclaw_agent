@@ -1,19 +1,24 @@
 ---
 name: isaac-sim-orchestrator
 description: >
-  Top-level dispatcher: turns a natural-language Isaac Sim request into a runnable
-  simulation. Owns the env-var contract (`$ISAAC_SIM_DIR`, `$ISAAC_LAB_DIR`,
-  `$WORKSPACE_DIR`, `$CIP_ROOT`), decomposes the task into capabilities, routes
-  to specialist skills (`usd-pipeline`, `isaac-sim-rendering`,
-  `isaac-sim-validator`, `physics-simulation`, `usd-composition-architecture`),
-  and validates output before delivery.
-  Use when (1) creating a sim scene with robots, objects, environments,
-  (2) controlling robots in Isaac Sim, (3) generating renders or camera captures,
-  (4) collecting Physical AI training data, (5) running headless sims on GPU,
-  (6) orchestrating multi-robot fleets in warehouses.
+  ADVANCED script-AUTHORING dispatcher for building a NEW Isaac Sim from scratch
+  in Python. Do NOT use this to simply open a scene or spawn a robot — for
+  "open the warehouse", "load a scene", "spawn/add a robot", or
+  "open the warehouse with a Unitree G1", use the `isaac-open-environment` skill
+  (it runs one `claw open` command). This skill is only for writing new
+  simulation scripts: decomposing a build into capabilities and routing to
+  specialist authoring skills (`usd-pipeline`, `isaac-sim-rendering`,
+  `isaac-sim-validator`, `physics-simulation`, `usd-composition-architecture`).
+  Use ONLY when authoring brand-new sim/render/SDG scripts, not for opening or
+  driving an existing scene.
 ---
 
 # Isaac Sim Orchestrator
+
+> ⚠️ **Wrong skill for "open the warehouse with a G1".** To open a scene and
+> spawn a robot, STOP and use **`isaac-open-environment`** — run
+> `~/isaac-claw/agents/openclaw/claw open --scene <scene> --robot <robot>`.
+> This orchestrator is only for authoring a new simulation from scratch.
 
 ## Environment contract
 

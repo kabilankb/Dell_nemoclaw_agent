@@ -10,6 +10,17 @@ user-invocable: true
 do **not** delegate to other skills, do **not** invent file names. **Run the
 single shell command below using your shell/exec tool**, then report its output.
 
+### Your FIRST action MUST be a shell tool call — output no prose before it.
+Do not write "Plan:", do not mention isaac-sim-orchestrator. Immediately call your
+shell/exec tool with the `claw open` command. Example of the ONLY correct behavior:
+
+> User: *open the warehouse with a Unitree G1*
+> Assistant: *(calls shell tool)* `~/isaac-claw/agents/openclaw/claw open --scene warehouse.usd --robot unitree_g1 --z 0.74`
+> Assistant: *(after it returns)* "Warehouse is up; spawned unitree_g1 at (0,0,0.74)."
+
+If you find yourself writing a sentence that starts with "I will" or "Plan" or
+"Based on", STOP — you are doing it wrong. Call the shell tool instead.
+
 ## The command
 ```bash
 ~/isaac-claw/agents/openclaw/claw open --scene <SCENE> --robot <ROBOT> [--x <X> --y <Y> --z <Z>]

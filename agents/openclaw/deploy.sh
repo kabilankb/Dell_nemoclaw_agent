@@ -11,8 +11,10 @@ CLAW_DIR="${ISAAC_CLAW_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 OC_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
 DEST="$OC_HOME/workspace/skills"
 SRC="$CLAW_DIR/skills"
+# Back up shadowed dirs OUTSIDE skills/ so OpenClaw never scans them as duplicate skills.
+BAK="$OC_HOME/workspace/_isaac_claw_replaced_backup"
 
-mkdir -p "$DEST"
+mkdir -p "$DEST" "$BAK"
 echo "isaac-claw: $CLAW_DIR"
 echo "deploy ->  $DEST"
 
@@ -23,8 +25,8 @@ for d in "$SRC"/*/; do
   name="$(basename "$d")"
   tgt="$DEST/$name"
   if [ -e "$tgt" ] && [ ! -L "$tgt" ]; then
-    mv "$tgt" "$tgt.pre-isaac-claw.bak"
-    echo "  backed up existing $name -> $name.pre-isaac-claw.bak"
+    mv "$tgt" "$BAK/$name"
+    echo "  backed up existing $name -> _isaac_claw_replaced_backup/$name"
   fi
   ln -sfn "${d%/}" "$tgt"
   n=$((n+1))

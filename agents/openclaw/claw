@@ -24,6 +24,7 @@ import os
 import subprocess
 import sys
 import time
+import socket
 import urllib.error
 import urllib.request
 
@@ -151,6 +152,22 @@ def resolve_spec(args):
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
+def _bridge_open(host="127.0.0.1", port=8226):
+    """Is a sim already serving the python_server bridge?"""
+    try:
+        socket.create_connection((host, port), timeout=2).close()
+        return True
+    except OSError:
+        return False
+
+
+def _kill_stray_sim():
+    """Stop any running serve_sim. Safe here — claw runs in the USER's process
+    tree (NOT the agent harness, which forbids killing Kit)."""
+    subprocess.run(["pkill", "-f", "serve_sim.py"], check=False)
+    time.sleep(3)
+
+
 def cmd_open(args):
     scene, robots = resolve_spec(args)
     if not ensure_server():
@@ -158,12 +175,18 @@ def cmd_open(args):
 
     gui = "--gui" in args
     st = _req("GET", "/status")[1]
-    if not (st.get("running") and str(st.get("kind", "")).startswith("sim")):
+    running = bool(st.get("running") and str(st.get("kind", "")).startswith("sim"))
+    # A windowed request always (re)launches; otherwise reuse a running sim.
+    if running and not gui:
+        print(f"[claw] a sim is already running ({st.get('label')}).")
+    else:
+        if running or _bridge_open():
+            print("[claw] stopping the current/orphaned sim to (re)launch ...")
+            _req("POST", "/stop", {})       # stop a tracked job (control server SIGTERMs Kit safely)
+            _kill_stray_sim()               # and any untracked orphan holding :8226
         win = "windowed GUI" if gui else "headless"
         print(f"[claw] launching persistent sim ({win}) on '{scene}' (GPU bring-up ~1-2 min) ...")
         _req("POST", "/sim/launch", {"scene": scene, "mode": "serve", "gui": gui})
-    else:
-        print(f"[claw] a sim is already running ({st.get('label')}).")
 
     # Probe the actual :8226 bridge (a real readiness check, not log-scraping).
     print("[claw] waiting for sim READY ", end="", flush=True)

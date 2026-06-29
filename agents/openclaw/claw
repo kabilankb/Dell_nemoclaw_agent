@@ -10,7 +10,8 @@ Collapses the whole control flow into ONE command so a small local model
         --gui  open a VISIBLE Isaac Sim window (needs a display); default headless
     claw open --scene warehouse.usd --robot unitree_g1 [--x 6 --y 0 --z 0.74]
     claw train --task <id> [--backend rsl_rl]
-    claw templates | scenes | robots | envs | status | stop
+    claw close                               stop the sim/training, free the GPU
+    claw templates | scenes | robots | envs | status
 
 TEMPLATES decouple robot from environment:
   * robot height/drive come from the asset catalog (per-robot),
@@ -234,6 +235,25 @@ def cmd_templates(_args):
     return 0
 
 
+def cmd_close(_args):
+    """Stop the running sim OR training and free the GPU + :8226 bridge."""
+    if server_up():
+        try:
+            r = _req("POST", "/stop", {})[1]
+            print(f"[claw] control server: {r.get('status', 'stopped')} "
+                  f"{r.get('kind', '')} {r.get('label', '')}".rstrip())
+        except Exception as e:
+            print(f"[claw] /stop failed: {e}")
+    else:
+        print("[claw] control server not running.")
+    if _bridge_open():                         # catch an orphaned/headless sim
+        print("[claw] stopping the sim process (freeing GPU + :8226) ...")
+        _kill_stray_sim()
+    print("[claw] closed — GPU free." if not _bridge_open()
+          else "[claw] a sim is still shutting down; re-run `claw close` if it lingers.")
+    return 0
+
+
 def cmd_train(args):
     if not ensure_server():
         return 1
@@ -268,10 +288,8 @@ def main():
         print(json.dumps(_req("GET", path)[1], indent=2)); return 0
     if cmd == "envs-tpl":
         return cmd_templates(rest)
-    if cmd == "stop":
-        if not ensure_server():
-            return 1
-        print(json.dumps(_req("POST", "/stop", {})[1], indent=2)); return 0
+    if cmd in ("close", "stop", "shutdown"):
+        return cmd_close(rest)
     print(f"unknown command: {cmd}\n{__doc__}", file=sys.stderr); return 2
 
 

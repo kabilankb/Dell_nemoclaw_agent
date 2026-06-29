@@ -18,7 +18,7 @@ BAK="$OC_HOME/workspace/_isaac_claw_replaced_backup"
 mkdir -p "$DEST" "$BAK"
 
 # The operational set the TUI actually needs (each maps to a `claw` action).
-OPERATIONAL=(task ops training teleop mimicgen)
+OPERATIONAL=(task close ops training teleop mimicgen)
 
 want_all=false
 [ "${1:-}" = "--all" ] && want_all=true

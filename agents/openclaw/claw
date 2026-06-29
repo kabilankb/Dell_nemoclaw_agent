@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """claw — the single deterministic entrypoint for isaac-claw.
 
-Collapses the multi-step control flow into ONE command so a small local model
-(Gemma/Nemotron) only has to emit a single tool call. Also usable by hand.
+Collapses the whole control flow into ONE command so a small local model
+(Gemma/Nemotron) only emits a single tool call. Also usable by hand.
 
     claw up                                  ensure the control server is running
+    claw open --template warehouse_g1        launch a named template (env + robots)
+    claw open --env warehouse --robot unitree_g1 [--anchor pick_station]
     claw open --scene warehouse.usd --robot unitree_g1 [--x 6 --y 0 --z 0.74]
     claw train --task <id> [--backend rsl_rl]
-    claw status | stop | envs | scenes | robots
+    claw templates | scenes | robots | envs | status | stop
 
-`claw open` does the whole "open the warehouse with a G1" flow end to end:
-ensure server -> launch a persistent sim (bridge :8226) -> wait until READY ->
-spawn the robot -> print the result. Idempotent and safe to re-run.
+TEMPLATES decouple robot from environment:
+  * robot height/drive come from the asset catalog (per-robot),
+  * spawn position comes from the environment's named anchors,
+so the SAME robot drops correctly into ANY environment with no pose math.
+`claw open` does: ensure server -> persistent sim (bridge :8226) -> wait READY ->
+spawn every robot in the resolved spec. Idempotent; safe to re-run.
 """
 import json
 import os
@@ -20,11 +25,18 @@ import sys
 import time
 import urllib.request
 
+import yaml  # available in both system python3 and env_isaaclab
+
 BASE = f"http://localhost:{os.environ.get('ISAAC_CONTROL_PORT', '5561')}"
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLAW_DIR = os.environ.get("ISAAC_CLAW_DIR", os.path.dirname(os.path.dirname(HERE)))
+TPL_DIR = os.path.join(CLAW_DIR, "isaac_sim", "templates")
+CATALOG = os.path.join(CLAW_DIR, "agents", "core", "assets", "catalog.yaml")
 
 
+# --------------------------------------------------------------------------- #
+# HTTP helpers
+# --------------------------------------------------------------------------- #
 def _req(method, path, body=None, timeout=10):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(BASE + path, data=data, method=method,
@@ -53,10 +65,86 @@ def ensure_server():
     return False
 
 
-def cmd_open(args):
-    scene = _opt(args, "--scene", "warehouse.usd")
+# --------------------------------------------------------------------------- #
+# Template resolution  (robot defaults from catalog × environment anchors)
+# --------------------------------------------------------------------------- #
+def _yaml(path):
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def robot_defaults(robot):
+    """z/drive for a robot, straight from the asset catalog (the robot template)."""
+    try:
+        cat = _yaml(CATALOG)
+        for cat_group in (cat.get("categories") or {}).values():
+            if isinstance(cat_group, dict) and robot in cat_group:
+                e = cat_group[robot] or {}
+                return {"z": float(e.get("start_z", 0.0)), "drive": e.get("drive")}
+    except Exception:
+        pass
+    return {"z": 0.0, "drive": None}
+
+
+def env_template(name):
+    envs = _yaml(os.path.join(TPL_DIR, "environments.yaml"))
+    return envs.get(name)
+
+
+def _place(robot, env, anchor, override):
+    """Resolve one robot's pose: anchor x/y from env, z from catalog, overridable."""
+    anchors = (env or {}).get("anchors") or {}
+    a = anchors.get(anchor or (env or {}).get("default_anchor"), {})
+    d = robot_defaults(robot)
+    zv = override.get("z")
+    z = d["z"] if zv in (None, "") else float(zv)
+    return {"robot": robot,
+            "x": float(override.get("x", a.get("x", 0.0))),
+            "y": float(override.get("y", a.get("y", 0.0))),
+            "z": z}
+
+
+def resolve_spec(args):
+    """Return (scene, [ {robot,x,y,z}, ... ]) from --template | --env/--robot | --scene/--robot."""
+    tpl = _opt(args, "--template", None)
+    if tpl:
+        path = os.path.join(TPL_DIR, tpl if tpl.endswith(".yaml") else tpl + ".yaml")
+        if not os.path.exists(path):
+            sys.exit(f"[claw] no such template: {tpl} (see `claw templates`)")
+        t = _yaml(path)
+        env = env_template(t.get("environment"))
+        if not env:
+            sys.exit(f"[claw] template '{tpl}' references unknown environment '{t.get('environment')}'")
+        robots = [_place(r["robot"], env, r.get("anchor"), r) for r in t.get("robots", [])]
+        return env["scene"], robots
+
+    env_name = _opt(args, "--env", None)
     robot = _opt(args, "--robot", None)
-    x, y, z = float(_opt(args, "--x", 0)), float(_opt(args, "--y", 0)), float(_opt(args, "--z", 0))
+    if env_name:
+        env = env_template(env_name)
+        if not env:
+            sys.exit(f"[claw] no such environment: {env_name} (see `claw envs-tpl`)")
+        robots = []
+        if robot:
+            robots = [_place(robot, env, _opt(args, "--anchor", None), {"z": _opt(args, "--z", None)})]
+        return env["scene"], robots
+
+    # explicit / legacy
+    scene = _opt(args, "--scene", "warehouse.usd")
+    robots = []
+    if robot:
+        d = robot_defaults(robot)
+        robots = [{"robot": robot,
+                   "x": float(_opt(args, "--x", 0)), "y": float(_opt(args, "--y", 0)),
+                   "z": float(_opt(args, "--z", d["z"]))}]
+    return scene, robots
+
+
+# --------------------------------------------------------------------------- #
+# Commands
+# --------------------------------------------------------------------------- #
+def cmd_open(args):
+    scene, robots = resolve_spec(args)
     if not ensure_server():
         return 1
 
@@ -67,28 +155,49 @@ def cmd_open(args):
     else:
         print(f"[claw] a sim is already running ({st.get('label')}).")
 
-    # wait for the :8226 bridge to be READY
     print("[claw] waiting for sim READY ", end="", flush=True)
     ready = False
-    for _ in range(120):                       # up to ~4 min
+    for _ in range(120):
         logs = _req("GET", "/logs?lines=8")[1].get("lines", "")
         if "[serve_sim] READY" in logs or "bridge live on :8226" in logs:
             ready = True; break
         print(".", end="", flush=True); time.sleep(2)
     print(" ready" if ready else " (timeout — trying spawn anyway)")
 
-    if not robot:
-        print("[claw] sim is up. (no --robot given; nothing to spawn)"); return 0
+    if not robots:
+        print("[claw] sim is up. (no robots in this spec)"); return 0
 
-    # spawn, retrying while the bridge finishes coming up
-    for attempt in range(6):
-        code, resp = _req("POST", "/robot/spawn", {"robot": robot, "x": x, "y": y, "z": z})
-        if code == 200 and resp.get("status") != "error":
-            print(f"[claw] spawned {robot} at ({x},{y},{z}):"); print(json.dumps(resp, indent=2)); return 0
-        print(f"[claw] spawn attempt {attempt+1} -> {code} {resp.get('error', resp)}; retrying ...")
-        time.sleep(5)
-    print("[claw] ERROR: could not spawn robot (is it in the catalog? `claw robots`)", file=sys.stderr)
-    return 1
+    rc = 0
+    for spec in robots:
+        ok = False
+        for attempt in range(6):
+            code, resp = _req("POST", "/robot/spawn", spec)
+            if code == 200 and resp.get("status") != "error":
+                print(f"[claw] spawned {spec['robot']} at ({spec['x']},{spec['y']},{spec['z']})")
+                ok = True; break
+            print(f"[claw] spawn {spec['robot']} attempt {attempt+1} -> {code} "
+                  f"{resp.get('error', resp)}; retrying ...")
+            time.sleep(5)
+        if not ok:
+            print(f"[claw] ERROR: could not spawn {spec['robot']} "
+                  f"(in catalog? `claw robots`)", file=sys.stderr)
+            rc = 1
+    return rc
+
+
+def cmd_templates(_args):
+    print("Composite templates (claw open --template <name>):")
+    for f in sorted(os.listdir(TPL_DIR)) if os.path.isdir(TPL_DIR) else []:
+        if f.endswith(".yaml") and f != "environments.yaml":
+            t = _yaml(os.path.join(TPL_DIR, f))
+            robots = ", ".join(r.get("robot", "?") for r in t.get("robots", []))
+            print(f"  {f[:-5]:20s} env={t.get('environment','?'):12s} robots=[{robots}]")
+    print("\nEnvironments (claw open --env <name> --robot <robot>):")
+    envs = _yaml(os.path.join(TPL_DIR, "environments.yaml"))
+    for name, e in envs.items():
+        anchors = ", ".join((e.get("anchors") or {}).keys())
+        print(f"  {name:20s} scene={e.get('scene','?'):16s} anchors=[{anchors}]")
+    return 0
 
 
 def cmd_train(args):
@@ -114,12 +223,17 @@ def main():
         return 0 if ensure_server() else 1
     if cmd == "open":
         return cmd_open(rest)
+    if cmd == "templates":
+        return cmd_templates(rest)
     if cmd == "train":
         return cmd_train(rest)
     if cmd in ("status", "envs", "scenes", "robots"):
         if not ensure_server():
             return 1
-        print(json.dumps(_req("GET", "/" + cmd if cmd != "status" else "/status")[1], indent=2)); return 0
+        path = "/status" if cmd == "status" else "/" + cmd
+        print(json.dumps(_req("GET", path)[1], indent=2)); return 0
+    if cmd == "envs-tpl":
+        return cmd_templates(rest)
     if cmd == "stop":
         if not ensure_server():
             return 1

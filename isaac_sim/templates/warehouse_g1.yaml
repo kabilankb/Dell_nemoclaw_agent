@@ -1,0 +1,11 @@
+# Composite template: a named, reusable scene setup = environment + robot(s).
+# Launch by name:   claw open --template warehouse_g1
+#
+# Robot height/drive come from the catalog; position comes from the environment
+# anchor. Override per-robot x/y/z here only if you need to deviate.
+
+name: warehouse_g1
+environment: warehouse
+robots:
+  - robot: unitree_g1
+    anchor: pick_station

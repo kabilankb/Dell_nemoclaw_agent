@@ -1,0 +1,29 @@
+# Environment templates — decoupled from any robot.
+#
+# Each environment declares the scene USD plus named spawn ANCHORS (where a robot
+# should appear in THIS environment). A robot's height/drive come from the robot
+# itself (the asset catalog), so the SAME robot drops correctly into ANY
+# environment below — the template takes care of the placement.
+#
+#   claw open --env warehouse --robot unitree_g1
+#   claw open --env warehouse --robot spot --anchor dock
+#
+# `scene` is a file in isaac_sim/scenes/ (or an absolute .usd path).
+
+warehouse:
+  scene: warehouse.usd
+  default_anchor: pick_station
+  anchors:
+    pick_station: {x: 6.0,  y: 0.0}      # the workstation
+    entrance:     {x: 0.5,  y: 0.0}
+    center:       {x: 16.0, y: 0.0}
+    dock:         {x: 30.0, y: 0.0}
+
+# --- add more environments here; robot templates need no change ---
+# Example (needs its scene USD present in isaac_sim/scenes/):
+# office:
+#   scene: office.usd
+#   default_anchor: desk
+#   anchors:
+#     desk:  {x: 2.0, y: 1.0}
+#     door:  {x: 0.0, y: 0.0}

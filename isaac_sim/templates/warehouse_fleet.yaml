@@ -1,0 +1,14 @@
+# Composite template with MULTIPLE robots (a fleet) in one environment.
+# Shows that a template isn't limited to one robot — same environment, several
+# robots, each placed at its own anchor, heights from the catalog.
+# Launch:   claw open --template warehouse_fleet
+
+name: warehouse_fleet
+environment: warehouse
+robots:
+  - robot: unitree_g1
+    anchor: pick_station
+  - robot: nova_carter        # wheeled AMR
+    anchor: entrance
+  - robot: spot               # quadruped
+    anchor: dock

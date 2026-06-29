@@ -1,41 +1,59 @@
 #!/usr/bin/env bash
-# Deploy the isaac-claw skill library into OpenClaw's workspace so a local model
-# (Gemma) can discover it. Non-destructive: symlinks each skill dir; any existing
-# REAL directory it would shadow is moved aside to <name>.pre-isaac-claw.bak.
+# Deploy isaac-claw skills into OpenClaw's workspace as REAL directories.
 #
-# Usage:  ./deploy.sh            # uses $ISAAC_CLAW_DIR or this repo, ~/.openclaw
-#         ISAAC_CLAW_DIR=... OPENCLAW_HOME=... ./deploy.sh
+# OpenClaw's skill scanner does NOT follow symlinks, so we copy. By default we
+# deploy only the small OPERATIONAL set (the skills that map to the `claw`
+# command) — a small surface keeps a local 12B model from wandering into deep
+# authoring skills. Use `--all` to also copy the full reference library.
+#
+#   ./deploy.sh           # operational set (recommended for the TUI)
+#   ./deploy.sh --all     # operational + full reference library
 set -euo pipefail
 
 CLAW_DIR="${ISAAC_CLAW_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 OC_HOME="${OPENCLAW_HOME:-$HOME/.openclaw}"
 DEST="$OC_HOME/workspace/skills"
 SRC="$CLAW_DIR/skills"
-# Back up shadowed dirs OUTSIDE skills/ so OpenClaw never scans them as duplicate skills.
 BAK="$OC_HOME/workspace/_isaac_claw_replaced_backup"
-
 mkdir -p "$DEST" "$BAK"
-echo "isaac-claw: $CLAW_DIR"
-echo "deploy ->  $DEST"
 
-# 1) every specialized skill (a dir containing SKILL.md)
-n=0
-for d in "$SRC"/*/; do
-  [ -f "${d}SKILL.md" ] || continue
-  name="$(basename "$d")"
-  tgt="$DEST/$name"
-  if [ -e "$tgt" ] && [ ! -L "$tgt" ]; then
-    mv "$tgt" "$BAK/$name"
-    echo "  backed up existing $name -> _isaac_claw_replaced_backup/$name"
+# The operational set the TUI actually needs (each maps to a `claw` action).
+OPERATIONAL=(task ops training teleop mimicgen)
+
+want_all=false
+[ "${1:-}" = "--all" ] && want_all=true
+
+# 1. Clear any previous isaac-claw deployment (old symlinks + the router dir).
+echo "clearing previous isaac-claw skills from $DEST ..."
+for entry in "$DEST"/*; do
+  [ -e "$entry" ] || continue
+  name="$(basename "$entry")"
+  if [ -L "$entry" ] && readlink "$entry" | grep -q "$SRC"; then
+    rm -f "$entry"                       # stale symlink into the repo
+  elif [ "$name" = "isaac-claw" ]; then
+    rm -rf "$entry"                      # old master-router dir
   fi
-  ln -sfn "${d%/}" "$tgt"
-  n=$((n+1))
 done
 
-# 2) the MASTER router (skills/skills.md) — exposed as a discoverable skill dir
-#    so OpenClaw loads it like any other SKILL.md (frontmatter name: isaac-claw-skills)
-mkdir -p "$DEST/isaac-claw"
-ln -sfn "$SRC/skills.md" "$DEST/isaac-claw/SKILL.md"
+# 2. Pick the set to deploy.
+if $want_all; then
+  mapfile -t SET < <(for d in "$SRC"/*/; do [ -f "${d}SKILL.md" ] && basename "$d"; done)
+else
+  SET=("${OPERATIONAL[@]}")
+fi
 
-echo "linked $n skills + master router (isaac-claw)."
-echo "verify:  ls -l $DEST | grep isaac-claw"
+# 3. Copy each as a REAL directory (dereference any internal symlinks).
+n=0
+for name in "${SET[@]}"; do
+  [ -f "$SRC/$name/SKILL.md" ] || { echo "  skip $name (no SKILL.md)"; continue; }
+  if [ -e "$DEST/$name" ] && [ ! -L "$DEST/$name" ]; then
+    rm -rf "$BAK/$name"; mv "$DEST/$name" "$BAK/$name"   # preserve a non-ours dir
+  fi
+  rm -rf "$DEST/$name"
+  cp -rL "$SRC/$name" "$DEST/$name"
+  n=$((n+1)); echo "  + $name"
+done
+
+echo "deployed $n real skill dir(s) to $DEST"
+$want_all || echo "(operational set only; run with --all for the full library)"
+echo "NOTE: real copies — re-run this after editing skills in the repo."

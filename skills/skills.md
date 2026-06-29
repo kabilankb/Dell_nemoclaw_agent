@@ -69,6 +69,7 @@ turns a user sentence into one of those HTTP calls or a launch script.
 ### E. Build & validate assets (articulation, USD, physics)
 | Skill | Purpose | Trigger keywords |
 |---|---|---|
+| [`articulation/SKILL.md`](articulation/SKILL.md) | **Task entry** — import + validate + register a sim-ready robot (chains the skills below) | articulation, import robot, fix joints, floppy/exploding robot, make spawnable |
 | [`urdf-mjcf-to-usd-conversion/SKILL.md`](urdf-mjcf-to-usd-conversion/SKILL.md) | URDF/MJCF → sim-ready USD; every new robot starts here | import robot, urdf, mjcf, convert to usd |
 | [`usd-articulation/SKILL.md`](usd-articulation/SKILL.md) | Validate multi-link articulation, ArticulationRoot, FixedJoint | articulation, joints, articulation root, flatten |
 | [`physics-simulation/SKILL.md`](physics-simulation/SKILL.md) | PhysX/Newton scene config, mass/collision/joint drives | physics, collision, mass, ccd, solver, contact |
@@ -111,9 +112,9 @@ turns a user sentence into one of those HTTP calls or a launch script.
 `teleop` (record with `--record`) → `mimicgen` (annotate → generate dataset → convert to LeRobot) → train via LeRobot/robomimic (`policy_skill` → robomimic.md).
 
 **Bring in a brand-new robot:**
-`urdf-mjcf-to-usd-conversion` → `usd-articulation` (validate) → `physics-simulation` (tune) → add to `agents/core/assets/catalog.yaml` → then it is spawnable via `task`.
+`articulation` (task entry) → `urdf-mjcf-to-usd-conversion` → `usd-articulation` (validate) → `physics-simulation` (tune) → add to `agents/core/assets/catalog.yaml` → then it is spawnable via `task`.
 
 ---
-*Skill count: 27 specialized skills + this router. New skills: drop a folder with a
+*Skill count: 28 specialized skills + this router. New skills: drop a folder with a
 `SKILL.md` (frontmatter: name, description with trigger keywords, user-invocable)
 and add one row above.*

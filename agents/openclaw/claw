@@ -6,7 +6,8 @@ Collapses the whole control flow into ONE command so a small local model
 
     claw up                                  ensure the control server is running
     claw open --template warehouse_g1        launch a named template (env + robots)
-    claw open --env warehouse --robot unitree_g1 [--anchor pick_station]
+    claw open --env warehouse --robot unitree_g1 [--anchor pick_station] [--gui]
+        --gui  open a VISIBLE Isaac Sim window (needs a display); default headless
     claw open --scene warehouse.usd --robot unitree_g1 [--x 6 --y 0 --z 0.74]
     claw train --task <id> [--backend rsl_rl]
     claw templates | scenes | robots | envs | status | stop
@@ -155,18 +156,21 @@ def cmd_open(args):
     if not ensure_server():
         return 1
 
+    gui = "--gui" in args
     st = _req("GET", "/status")[1]
     if not (st.get("running") and str(st.get("kind", "")).startswith("sim")):
-        print(f"[claw] launching persistent sim on '{scene}' (GPU bring-up ~1-2 min) ...")
-        _req("POST", "/sim/launch", {"scene": scene, "mode": "serve"})
+        win = "windowed GUI" if gui else "headless"
+        print(f"[claw] launching persistent sim ({win}) on '{scene}' (GPU bring-up ~1-2 min) ...")
+        _req("POST", "/sim/launch", {"scene": scene, "mode": "serve", "gui": gui})
     else:
         print(f"[claw] a sim is already running ({st.get('label')}).")
 
+    # Probe the actual :8226 bridge (a real readiness check, not log-scraping).
     print("[claw] waiting for sim READY ", end="", flush=True)
     ready = False
-    for _ in range(120):
-        logs = _req("GET", "/logs?lines=8")[1].get("lines", "")
-        if "[serve_sim] READY" in logs or "bridge live on :8226" in logs:
+    for _ in range(150):
+        code, resp = _req("POST", "/exec", {"code": "print('pong')"}, timeout=15)
+        if code == 200 and resp.get("status") != "error":
             ready = True; break
         print(".", end="", flush=True); time.sleep(2)
     print(" ready" if ready else " (timeout — trying spawn anyway)")

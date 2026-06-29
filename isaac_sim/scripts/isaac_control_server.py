@@ -299,6 +299,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._respond(500, {"error": f"launcher missing: {launcher}"})
         py = str(ISAAC_SIM_INSTALL / "python.sh") if (ISAAC_SIM_INSTALL / "python.sh").exists() else LAB_PYTHON
         cmd = [py, str(launcher), "--scene", scene]
+        if body.get("gui"):                     # open a visible window (needs DISPLAY)
+            cmd.append("--gui")
         if mode != "serve":
             cmd.append("--no-build")
         self._respond(200, start_job("sim", f"{scene}:{mode}", cmd, str(SIM_DIR / "scripts")))
@@ -326,13 +328,29 @@ class Handler(BaseHTTPRequestHandler):
         x, y, z = body.get("x", 0.0), body.get("y", 0.0), body.get("z", 0.0)
         prim = "/World/" + "".join(c for c in name.title() if c.isalnum())
         code = (
-            "from pxr import Usd, UsdGeom, Gf, Sdf\n"
+            "from pxr import UsdGeom, Gf\n"
             "import omni.usd\n"
+            # resolve nucleus tokens to the real asset root (in-sim)
+            "try:\n"
+            "    from isaacsim.storage.native import get_assets_root_path\n"
+            "except Exception:\n"
+            "    from omni.isaac.nucleus import get_assets_root_path\n"
+            f"usd = r'''{usd}'''\n"
+            "root = get_assets_root_path() or ''\n"
+            "usd = usd.replace('{ISAACLAB_NUCLEUS_DIR}', root + '/Isaac/IsaacLab')"
+            ".replace('{ISAAC_NUCLEUS_DIR}', root + '/Isaac')"
+            ".replace('{NUCLEUS_ASSET_ROOT_DIR}', root)\n"
             "stage = omni.usd.get_context().get_stage()\n"
-            f"p = stage.DefinePrim('{prim}', 'Xform')\n"
-            f"p.GetReferences().AddReference(r'{usd}')\n"
-            f"UsdGeom.Xformable(p).AddTranslateOp().Set(Gf.Vec3d({x},{y},{z}))\n"
-            f"print('spawned {name} at ({x},{y},{z}) from {usd}')\n"
+            f"p = stage.GetPrimAtPath('{prim}')\n"
+            "if not (p and p.IsValid()):\n"
+            f"    p = stage.DefinePrim('{prim}', 'Xform')\n"
+            "    p.GetReferences().AddReference(usd)\n"
+            # reuse an existing translate op instead of adding a duplicate
+            "xf = UsdGeom.Xformable(p)\n"
+            "ops = {op.GetOpType(): op for op in xf.GetOrderedXformOps()}\n"
+            "t = ops.get(UsdGeom.XformOp.TypeTranslate) or xf.AddTranslateOp()\n"
+            f"t.Set(Gf.Vec3d({x}, {y}, {z}))\n"
+            f"print('spawned {name} at ({x},{y},{z}) ->', usd)\n"
         )
         try:
             return self._respond(200, send_to_sim(code))

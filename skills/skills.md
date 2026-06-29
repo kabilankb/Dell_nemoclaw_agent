@@ -42,6 +42,7 @@ turns a user sentence into one of those HTTP calls or a launch script.
 ### A. Operate the simulator (Goal 1 & 2 — open env + robot from a prompt)
 | Skill | Purpose | Trigger keywords |
 |---|---|---|
+| [`ops/SKILL.md`](ops/SKILL.md) | **Run this FIRST** — ensure the control server (and, if needed, a live sim) is up; self-heal on connection failures | start, bring up, is it running, server down, connection refused, health, restart |
 | [`task/SKILL.md`](task/SKILL.md) | **Entry skill** — turn "open the warehouse with a G1" into scene-launch + robot-spawn calls; pick the right scene & robot | open, load scene, set up, environment, warehouse, spawn, add robot, bring up the sim |
 | [`isaac-sim-remote/SKILL.md`](isaac-sim-remote/SKILL.md) | Drive a *running* sim over the python_server socket (8226) → `POST /exec` | run code, screenshot, inspect prim, step sim, remote control |
 | [`isaac-sim-orchestrator/SKILL.md`](isaac-sim-orchestrator/SKILL.md) | Top-level dispatcher for full sim builds; env-var contract | build a sim, orchestrate, full scene from scratch |

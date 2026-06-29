@@ -1,0 +1,87 @@
+"""Persistent headless Isaac Sim for isaac-claw.
+
+Unlike launch_warehouse.py (a one-shot that screenshots then exits), this one:
+  1. boots a headless Isaac Sim,
+  2. enables the `isaacsim.code_editor.python_server` bridge (TCP :8226) from the
+     in-repo extension under isaac_sim/source,
+  3. opens the requested scene,
+  4. STAYS ALIVE, pumping the app so the socket keeps serving.
+
+That is what lets the control server's /scene/load, /robot/spawn and /exec drive a
+live sim — i.e. "open the warehouse with a G1" works from a single OpenClaw prompt.
+
+    python.sh serve_sim.py [--scene warehouse.usd|/abs/path.usd] [--gui]
+
+Paths come from $ISAAC_CLAW_DIR (defaults to this repo).
+"""
+import os
+import sys
+from pathlib import Path
+
+CLAW_DIR = Path(os.environ.get("ISAAC_CLAW_DIR", Path(__file__).resolve().parents[2]))
+SIM_DIR = CLAW_DIR / "isaac_sim"
+EXT_FOLDER = SIM_DIR / "source"          # folder CONTAINING the extension dir
+SCENES = SIM_DIR / "scenes"
+EXT_NAME = "isaacsim.code_editor.python_server"
+
+argv = sys.argv[1:]
+headless = "--gui" not in argv
+scene = os.environ.get("ISAAC_SCENE", "warehouse.usd")
+if "--scene" in argv:
+    scene = argv[argv.index("--scene") + 1]
+scene_path = scene if os.path.isabs(scene) else str(SCENES / scene)
+
+# ---------------------------------------------------------------------------
+# 1. Boot Isaac Sim.
+# ---------------------------------------------------------------------------
+from isaacsim import SimulationApp  # noqa: E402
+
+simulation_app = SimulationApp({"headless": headless, "renderer": "RayTracedLighting"})
+
+import carb  # noqa: E402
+import omni.kit.app  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# 2. Register the in-repo ext folder and enable the python_server bridge.
+# ---------------------------------------------------------------------------
+try:
+    _settings = carb.settings.get_settings()
+    _settings.set(f"/exts/{EXT_NAME}/host", "127.0.0.1")
+    _settings.set(f"/exts/{EXT_NAME}/port", 8226)
+    mgr = omni.kit.app.get_app().get_extension_manager()
+    mgr.add_path(str(EXT_FOLDER))
+    mgr.set_extension_enabled_immediate(EXT_NAME, True)
+    for _ in range(10):
+        simulation_app.update()
+    print(f"[serve_sim] enabled {EXT_NAME} on 127.0.0.1:8226")
+except Exception as e:
+    print(f"[serve_sim] WARNING could not enable {EXT_NAME}: {e}")
+
+# ---------------------------------------------------------------------------
+# 3. Open the scene (or start empty if it's missing).
+# ---------------------------------------------------------------------------
+import isaacsim.core.experimental.utils.stage as stage_utils  # noqa: E402
+
+if os.path.exists(scene_path):
+    print(f"[serve_sim] opening {scene_path} ...")
+    stage_utils.open_stage(scene_path)
+    while stage_utils.is_stage_loading():
+        simulation_app.update()
+    print(f"[serve_sim] scene loaded")
+else:
+    print(f"[serve_sim] scene not found ({scene_path}); serving an empty stage")
+    for _ in range(10):
+        simulation_app.update()
+
+# ---------------------------------------------------------------------------
+# 4. Stay alive so the bridge keeps serving (this is the whole point).
+# ---------------------------------------------------------------------------
+print("[serve_sim] READY — python_server bridge live on :8226. "
+      "Drive it via the control server (/scene/load, /robot/spawn, /exec). Ctrl-C to stop.")
+try:
+    while simulation_app.is_running():
+        simulation_app.update()
+except KeyboardInterrupt:
+    print("[serve_sim] shutting down")
+finally:
+    simulation_app.close()

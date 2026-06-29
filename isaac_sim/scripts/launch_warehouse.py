@@ -18,9 +18,12 @@ import os
 import sys
 import runpy
 
-SCENE_DIR = "/home/dgx-destro/warehouse_nemoclaw/warehouse_scene"
+# isaac-claw layout: scripts live in isaac_sim/scripts, scenes in isaac_sim/scenes.
+_CLAW = os.environ.get("ISAAC_CLAW_DIR", os.path.expanduser("~/isaac-claw"))
+SCENE_DIR = os.path.join(_CLAW, "isaac_sim", "scripts")
+SCENES_DIR = os.path.join(_CLAW, "isaac_sim", "scenes")
 BUILD_SCRIPT = os.path.join(SCENE_DIR, "build_warehouse.py")
-OUT_USD = os.path.join(SCENE_DIR, "warehouse.usd")
+OUT_USD = os.path.join(SCENES_DIR, "warehouse.usd")
 
 # --- tiny arg parse (avoid argparse colliding with Kit's argv) ---
 argv = sys.argv[1:]
@@ -30,6 +33,9 @@ pt = "--pt" in argv                       # Path Tracing hero render (GI, soft s
 shot = "/tmp/warehouse.png"
 if "--shot" in argv:
     shot = argv[argv.index("--shot") + 1]
+if "--scene" in argv:                      # honor an explicit scene name/path
+    _sc = argv[argv.index("--scene") + 1]
+    OUT_USD = _sc if os.path.isabs(_sc) else os.path.join(SCENES_DIR, _sc)
 
 # ---------------------------------------------------------------------------
 # 1. Boot Isaac Sim FIRST so the USD runtime is the Kit one.

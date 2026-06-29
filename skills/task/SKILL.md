@@ -24,8 +24,11 @@ table…). Pick the robot by fuzzy-matching the user's words to a catalog key.
 ```
 POST /sim/launch   {"scene": "warehouse.usd"}
 ```
-This launches Isaac Sim headless and opens the scene. Poll `GET /status` until
-`running` is true and the log (`GET /logs`) shows the stage opened.
+This launches a **persistent** headless Isaac Sim (default `mode:"serve"`) with the
+python_server bridge on :8226 — that is what makes Step 3's `/robot/spawn` work.
+Poll `GET /status` until `running` is true, and `GET /logs` shows `[serve_sim]
+READY` (~1–2 min for GPU bring-up). If `/sim/launch` returns connection-refused,
+the control server is down — run [`../ops/SKILL.md`](../ops/SKILL.md) first.
 
 > If the user wants an Isaac **Lab** task world instead of a free USD scene (e.g.
 > "open the G1 velocity task"), skip /sim/launch and route to

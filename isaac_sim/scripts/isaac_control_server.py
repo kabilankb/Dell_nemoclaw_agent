@@ -290,13 +290,18 @@ class Handler(BaseHTTPRequestHandler):
         if not self._guard_gpu():
             return
         scene = body.get("scene", "warehouse.usd")
-        launcher = SIM_DIR / "scripts" / "launch_warehouse.py"
-        scene_path = SIM_DIR / "scenes" / scene
+        # mode 'serve' (default) = persistent sim with the :8226 bridge enabled,
+        # so /scene/load and /robot/spawn work afterwards. mode 'shot' = one-shot
+        # render+screenshot via launch_warehouse.py (exits when done).
+        mode = body.get("mode", "serve")
+        launcher = SIM_DIR / "scripts" / ("serve_sim.py" if mode == "serve" else "launch_warehouse.py")
         if not launcher.exists():
             return self._respond(500, {"error": f"launcher missing: {launcher}"})
-        cmd = [str(ISAAC_SIM_INSTALL / "python.sh") if (ISAAC_SIM_INSTALL / "python.sh").exists() else LAB_PYTHON,
-               str(launcher), "--no-build", "--scene", str(scene_path)]
-        self._respond(200, start_job("sim", scene, cmd, str(SIM_DIR / "scripts")))
+        py = str(ISAAC_SIM_INSTALL / "python.sh") if (ISAAC_SIM_INSTALL / "python.sh").exists() else LAB_PYTHON
+        cmd = [py, str(launcher), "--scene", scene]
+        if mode != "serve":
+            cmd.append("--no-build")
+        self._respond(200, start_job("sim", f"{scene}:{mode}", cmd, str(SIM_DIR / "scripts")))
 
     def _scene_load(self, body):
         scene = body.get("scene")

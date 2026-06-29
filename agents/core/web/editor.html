@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Agent Workflow Editor</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.css"/>
+<script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.js"></script>
+<style>
+  :root{--bg:#0b1220;--panel:#0e1526;--line:#243049;--ink:#e2e8f0;--mut:#94a3b8;--acc:#6366f1;}
+  *{box-sizing:border-box;}
+  body{margin:0;height:100vh;display:flex;flex-direction:column;background:var(--bg);
+    color:var(--ink);font:14px/1.45 ui-sans-serif,system-ui,Segoe UI,Roboto,sans-serif;}
+  header{display:flex;gap:10px;align-items:center;padding:10px 16px;background:linear-gradient(120deg,#0f172a,#1e1b4b 60%,#312e81);
+    border-bottom:1px solid #4338ca;}
+  header h1{font-size:15px;margin:0;color:#ede9fe;letter-spacing:.3px;white-space:nowrap;}
+  header .sub{color:#a5b4fc;font-size:12px;margin-right:auto;}
+  input,select,button{font:inherit;color:var(--ink);background:#111a2e;border:1px solid var(--line);
+    border-radius:8px;padding:6px 10px;}
+  button{cursor:pointer;background:#1b2542;}
+  button.primary{background:var(--acc);border-color:#4f46e5;color:#fff;font-weight:600;}
+  button.go{background:#16a34a;border-color:#15803d;color:#fff;font-weight:700;}
+  button:hover{filter:brightness(1.12);}
+  main{flex:1;display:grid;grid-template-columns:210px 1fr 360px;min-height:0;}
+  .palette{border-right:1px solid var(--line);padding:12px;overflow:auto;background:var(--panel);}
+  .palette h3{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut);margin:4px 0 10px;}
+  .chip{display:flex;align-items:center;gap:9px;padding:9px 11px;margin-bottom:9px;border-radius:10px;
+    border:1px solid var(--line);background:#111a2e;cursor:grab;user-select:none;}
+  .chip:active{cursor:grabbing;}
+  .chip .ic{font-size:18px;}
+  .chip .nm{font-size:12.5px;font-weight:600;}
+  .chip .lv{margin-left:auto;font-size:10px;color:var(--mut);}
+  .hint{color:var(--mut);font-size:11px;margin-top:14px;line-height:1.5;}
+  #canvas{position:relative;background:
+     radial-gradient(circle, #1c2740 1px, transparent 1px) 0 0/22px 22px,var(--bg);}
+  .drawflow .drawflow-node{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    color:var(--ink);padding:0;min-width:180px;box-shadow:0 6px 20px #0008;}
+  .drawflow .drawflow-node.selected{box-shadow:0 0 0 2px var(--acc),0 6px 20px #0008;}
+  .nd{padding:11px 13px;border-left:4px solid var(--ndc,#64748b);border-radius:10px;}
+  .nd .t{display:flex;align-items:center;gap:8px;font-weight:600;font-size:13px;}
+  .nd .t .ic{font-size:16px;}
+  .nd .meta{color:var(--mut);font-size:11px;margin-top:4px;display:flex;gap:8px;align-items:center;}
+  .nd .star{cursor:pointer;margin-left:auto;font-size:13px;opacity:.4;}
+  .nd .star.on{opacity:1;color:#fbbf24;}
+  .drawflow .connection .main-path{stroke:#475569;stroke-width:2.4px;}
+  .drawflow .drawflow-node .input,.drawflow .drawflow-node .output{background:#1b2542;border:2px solid var(--acc);}
+  .side{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0;}
+  .run{padding:12px;border-bottom:1px solid var(--line);}
+  .run .row{display:flex;gap:8px;margin-bottom:8px;align-items:center;}
+  .run input[type=text]{flex:1;}
+  .run label{font-size:12px;color:var(--mut);display:flex;gap:6px;align-items:center;}
+  #log{flex:1;overflow:auto;padding:10px 12px;font:12px/1.5 ui-monospace,Menlo,monospace;
+    color:#cbd5e1;white-space:pre-wrap;}
+  .ln{padding:1px 0;} .ln.l0{color:#7dd3fc;} .ln.route{color:#a5b4fc;} .ln.err{color:#fca5a5;}
+  .ln.verdict{color:#86efac;} .ln.tool{color:#94a3b8;} .ln.reroute{color:#fbbf24;}
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#1b2542;
+    border:1px solid var(--acc);border-radius:10px;padding:9px 16px;font-size:13px;opacity:0;
+    transition:opacity .2s;pointer-events:none;}
+  .toast.show{opacity:1;}
+  /* ---- conversation overlay ---- */
+  #chat{position:fixed;inset:0;background:var(--bg);display:none;flex-direction:column;z-index:50;}
+  #chat.show{display:flex;}
+  #chat header{background:linear-gradient(120deg,#0f172a,#15233f);border-bottom:1px solid var(--line);}
+  #chatcmd{flex:1;}
+  #msgs{flex:1;overflow:auto;padding:20px;max-width:980px;width:100%;margin:0 auto;}
+  .turn{border-top:1px dashed var(--line);margin-top:16px;padding-top:12px;}
+  .turn:first-child{border-top:none;}
+  .divider{display:flex;align-items:center;gap:10px;font-weight:700;font-size:13.5px;margin:6px 0 10px;}
+  .divider .tag{font-size:11px;color:var(--mut);font-weight:500;}
+  .bubble{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 14px;
+    margin:8px 0;white-space:pre-wrap;font-size:13.5px;}
+  .bubble.muted{color:var(--mut);font-size:12.5px;}
+  .tools{display:flex;flex-wrap:wrap;gap:7px;margin:6px 0;}
+  .toolchip{background:#111a2e;border:1px solid var(--line);border-radius:999px;padding:3px 11px;
+    font:12px ui-monospace,monospace;color:#cbd5e1;}
+  .atlas{border-left:4px solid #38bdf8;}
+  .vcard{border-radius:12px;padding:11px 14px;margin:8px 0;font-weight:600;font-size:13.5px;}
+  .vPASS{background:#16a34a18;border:1px solid #16a34a66;color:#86efac;}
+  .vWARN{background:#d9770618;border:1px solid #d9770666;color:#fcd34d;}
+  .vFAIL{background:#ef444418;border:1px solid #ef444466;color:#fca5a5;}
+  .choices{background:#0e1526;border:1px dashed var(--acc);border-radius:14px;padding:14px;margin:12px 0 4px;}
+  .choices .q{font-size:12px;color:var(--mut);margin-bottom:10px;text-transform:uppercase;letter-spacing:.06em;}
+  .choices .opt{display:flex;align-items:center;gap:10px;width:100%;text-align:left;margin-bottom:8px;
+    padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:#111a2e;cursor:pointer;}
+  .choices .opt:hover{border-color:var(--acc);}
+  .choices .opt.rec{border-color:#16a34a;background:#16a34a12;}
+  .choices .opt .pill{margin-left:auto;font-size:10.5px;background:#16a34a;color:#04200f;
+    padding:2px 9px;border-radius:999px;font-weight:700;}
+  .choices.locked{opacity:.5;pointer-events:none;}
+  .errline{color:#fca5a5;font-size:13px;margin:6px 0;}
+  .usermsg{background:#4338ca22;border:1px solid #4f46e5;border-radius:12px;padding:11px 14px;
+    margin:4px 0 6px;font-size:14px;font-weight:600;color:#e0e7ff;display:flex;gap:10px;align-items:center;}
+  .usermsg .tag{margin-left:auto;font-size:11px;font-weight:600;color:#c7d2fe;background:#1b2542;
+    border:1px solid var(--line);border-radius:999px;padding:2px 10px;}
+  .memnote{color:#7dd3fc;font-size:11.5px;margin:0 0 8px;}
+  .composer{display:flex;gap:8px;align-items:center;margin:14px 0 6px;padding:10px;
+    border:1px solid var(--acc);border-radius:14px;background:#0e1526;position:sticky;bottom:8px;}
+  .composer .cagent{width:210px;flex:none;}
+  .composer .cinput{flex:1;}
+  .composer .csend{flex:none;}
+</style>
+</head>
+<body>
+<header>
+  <h1>⌨️ Agent Workflow Editor</h1>
+  <span class="sub">drag agents → wire them → Save → Run a command</span>
+  <input id="wfname" style="width:200px" placeholder="workflow name"/>
+  <select id="wflist" title="open a saved workflow"></select>
+  <input id="savepath" style="width:300px" title="save path"/>
+  <button id="btnSave" class="primary">💾 Save</button>
+  <button id="btnChat" class="go" title="finish design → run as a conversation">💬 Run Chat</button>
+</header>
+<main>
+  <aside class="palette">
+    <h3>Agent palette</h3>
+    <div id="chips"></div>
+    <div class="hint">
+      <b>Drag</b> a node onto the canvas.<br/>
+      <b>Wire</b> a node's right port → another's left port.<br/>
+      • trigger ▶ Atlas = <i>dispatch</i><br/>
+      • Atlas ▶ agent = <i>route</i><br/>
+      • agent ▶ agent = <i>reroute</i><br/>
+      • agent ▶ Atlas = <i>validate</i><br/>
+      <b>★</b> marks the default (fall-through) agent.<br/>
+      Select a node + <b>Delete</b> to remove.
+    </div>
+  </aside>
+  <div id="canvas"></div>
+  <aside class="side">
+    <div class="run">
+      <div class="row">
+        <input id="cmd" type="text" placeholder="e.g. place 4 nova carters in the warehouse"/>
+        <button id="btnRun" class="go">▶ Run</button>
+      </div>
+      <div class="row">
+        <select id="backend" title="backend">
+          <option value="dryrun">Dry-run (no API)</option>
+          <option value="sdk">Claude Agent SDK</option>
+          <option value="openclaw">OpenClaw</option>
+          <option value="nemoclaw">NemoClaw</option>
+        </select>
+        <label><input type="checkbox" id="supervise" checked/> 🛰️ Atlas</label>
+        <label><input type="checkbox" id="allowexec"/> L4 exec</label>
+      </div>
+    </div>
+    <div id="log"><div class="ln" style="color:#64748b">Build a graph, Save, then Run a command. Events stream here.</div></div>
+  </aside>
+</main>
+<div class="toast" id="toast"></div>
+
+<!-- conversation / run-chat overlay -->
+<div id="chat">
+  <header>
+    <h1>💬 Run Conversation</h1>
+    <span class="sub">agents run one at a time · pick the LLM's choice · memory persists across chats</span>
+    <span id="threadlbl" class="sub" style="margin-right:6px"></span>
+    <select id="chatbackend" title="execution backend — SDK calls the real model" style="width:185px">
+      <option value="sdk">⚡ Claude Agent SDK</option>
+      <option value="dryrun">Dry-run (no API)</option>
+      <option value="openclaw">OpenClaw</option>
+      <option value="nemoclaw">NemoClaw</option>
+    </select>
+    <label class="sub" style="display:flex;gap:4px;align-items:center" title="Atlas validates each turn (adds a 2nd model call)"><input type="checkbox" id="chatsupervise"/> 🛰️ Atlas</label>
+    <label class="sub" style="display:flex;gap:4px;align-items:center" title="let L4 run Bash (training/teleop)"><input type="checkbox" id="chatexec"/> L4 exec</label>
+    <button id="newThread" title="forget memory and start a fresh thread">🗑 New thread</button>
+    <button id="chatBack">← Back to design</button>
+  </header>
+  <div id="msgs"></div>
+</div>
+
+<script>
+const editor = new Drawflow(document.getElementById("canvas"));
+editor.reroute = true;
+editor.start();
+
+let PALETTE = [];
+let META = {};          // ourNodeId -> {type,key,layer,agent,title,icon,color,match,default,file}
+let counter = 1;
+const fileByAgent = {};
+
+function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"),1900);}
+function logln(kind,text){const el=document.getElementById("log");
+  const d=document.createElement("div");d.className="ln "+kind;d.textContent=text;
+  el.appendChild(d);el.scrollTop=el.scrollHeight;}
+function clearLog(){document.getElementById("log").innerHTML="";}
+
+function nodeHTML(m, ourId){
+  const star = m.type==="agent"
+    ? `<span class="star ${m.default?'on':''}" onclick="toggleDefault('${ourId}',event)" title="default lane">★</span>` : "";
+  const lv = (m.layer!==null && m.layer!==undefined) ? `L${m.layer}` : "trigger";
+  return `<div class="nd" style="--ndc:${m.color}">
+      <div class="t"><span class="ic">${m.icon||""}</span><span>${m.title}</span>${star}</div>
+      <div class="meta">${lv}${m.key?` · ${m.key}`:""}${m.match&&m.match.length?` · ${m.match.length} kw`:""}</div>
+    </div>`;
+}
+
+function inputsOutputs(type){
+  if(type==="trigger") return [0,1];
+  // Atlas: input (dispatch from trigger + validate from agents) AND output
+  // (route/dispatch to agents). Needs an output port so it can be wired out.
+  if(type==="supervisor") return [1,1];
+  return [1,1];
+}
+
+function addNode(m, x, y, ourId){
+  ourId = ourId || (m.key||m.kind||"node")+"_"+(counter++);
+  META[ourId] = JSON.parse(JSON.stringify(m));
+  META[ourId].default = !!m.default;
+  const [ins,outs] = inputsOutputs(m.type);
+  const df = editor.addNode(ourId, ins, outs, x, y, m.type, {nodeId:ourId},
+                            nodeHTML(META[ourId], ourId));
+  return df;  // drawflow numeric id
+}
+
+window.toggleDefault = function(ourId, ev){
+  ev.stopPropagation();
+  // single default among agents
+  Object.keys(META).forEach(k=>{ if(META[k].type==="agent") META[k].default=false; });
+  META[ourId].default = true;
+  // re-render stars
+  document.querySelectorAll(".nd .star").forEach(s=>s.classList.remove("on"));
+  ev.target.classList.add("on");
+  toast("default lane → "+META[ourId].title);
+};
+
+// ---- palette drag/drop -----------------------------------------------------
+function buildPalette(){
+  const c=document.getElementById("chips");c.innerHTML="";
+  PALETTE.forEach(p=>{
+    if(p.file) fileByAgent[p.agent]=p.file;
+    const lv=(p.layer!==null&&p.layer!==undefined)?`L${p.layer}`:"⌨";
+    const el=document.createElement("div");el.className="chip";el.draggable=true;
+    el.innerHTML=`<span class="ic">${p.icon}</span><span class="nm">${p.title}</span><span class="lv">${lv}</span>`;
+    el.addEventListener("dragstart",ev=>ev.dataTransfer.setData("kind",p.kind));
+    c.appendChild(el);
+  });
+}
+const cv=document.getElementById("canvas");
+cv.addEventListener("dragover",ev=>ev.preventDefault());
+cv.addEventListener("drop",ev=>{
+  ev.preventDefault();
+  const kind=ev.dataTransfer.getData("kind");
+  const tpl=PALETTE.find(p=>p.kind===kind); if(!tpl) return;
+  const rect=editor.precanvas.getBoundingClientRect();
+  const z=editor.zoom;
+  const x=(ev.clientX-rect.x)/z;
+  const y=(ev.clientY-rect.y)/z;
+  addNode(tpl, x, y);
+});
+
+// ---- build our graph schema from the canvas --------------------------------
+function buildGraph(){
+  const dump=editor.export().drawflow.Home.data;
+  const idmap={};  // drawflow id -> ourId
+  for(const k in dump) idmap[k]=dump[k].data.nodeId;
+  const nodes=[], agents={};
+  for(const k in dump){
+    const n=dump[k], ourId=n.data.nodeId, m=META[ourId];
+    const nd={id:ourId,type:m.type,title:m.title,
+      position:{x:Math.round(n.pos_x),y:Math.round(n.pos_y)}};
+    if(m.key)nd.key=m.key;
+    if(m.layer!==null&&m.layer!==undefined)nd.layer=m.layer;
+    if(m.agent){nd.agent=m.agent; if(fileByAgent[m.agent]) agents[m.agent]={file:fileByAgent[m.agent],icon:m.icon,color:m.color};}
+    if(m.icon)nd.icon=m.icon;
+    if(m.color)nd.color=m.color;
+    if(m.default)nd.default=true;
+    if(m.match&&m.match.length)nd.match=m.match;
+    nodes.push(nd);
+  }
+  const edges=[];
+  for(const k in dump){
+    const n=dump[k], srcId=n.data.nodeId, srcType=META[srcId].type, outs=n.outputs||{};
+    for(const oc in outs){
+      for(const c of outs[oc].connections){
+        const dst=dump[c.node].data.nodeId, dm=META[dst];
+        let etype="route", signal="";
+        if(srcType==="trigger") etype=(dm.type==="supervisor")?"dispatch":"route";
+        else if(srcType==="supervisor") etype="route";        // Atlas dispatches to a worker
+        else if(dm.type==="supervisor") etype="validate";     // worker → Atlas
+        else { etype="reroute"; signal=dm.key||""; }
+        const e={from:srcId,to:dst,type:etype};
+        if(signal)e.signal=signal;
+        if(etype==="route"&&dm.default)e.default=true;
+        edges.push(e);
+      }
+    }
+  }
+  return {name:document.getElementById("wfname").value||"Custom Workflow",
+          description:"Built in the visual editor.",agents,nodes,edges,
+          settings:{max_hops:4,max_retries:2}};
+}
+
+// ---- load a graph onto the canvas ------------------------------------------
+function loadGraph(g){
+  editor.clear(); META={}; counter=1;
+  document.getElementById("wfname").value=g.name||"";
+  const dfId={};
+  (g.nodes||[]).forEach(nd=>{
+    const m={type:nd.type,key:nd.key||"",layer:(nd.layer!==undefined?nd.layer:null),
+      agent:nd.agent||"",title:nd.title||nd.id,icon:nd.icon||"",color:nd.color||"#64748b",
+      match:nd.match||[],default:!!nd.default,kind:nd.key||nd.type};
+    dfId[nd.id]=addNode(m,(nd.position&&nd.position.x)||40,(nd.position&&nd.position.y)||40,nd.id);
+  });
+  (g.edges||[]).forEach(e=>{
+    if(dfId[e.from]==null||dfId[e.to]==null) return;
+    try{ editor.addConnection(dfId[e.from],dfId[e.to],"output_1","input_1"); }catch(err){}
+  });
+}
+
+// ---- API -------------------------------------------------------------------
+async function init(){
+  const r=await fetch("/api/state"); const s=await r.json();
+  PALETTE=s.palette; buildPalette();
+  document.getElementById("savepath").value=s.default_save;
+  const sel=document.getElementById("wflist");
+  sel.innerHTML='<option value="">— open saved —</option>'+
+    s.workflows.map(w=>`<option value="${w}">${w}</option>`).join("");
+  document.getElementById("backend").value=s.settings.backend||"sdk";
+  document.getElementById("supervise").checked=!!s.settings.supervise;
+  loadGraph(s.graph);
+  toast("loaded "+(s.active_path||"default"));
+}
+document.getElementById("wflist").addEventListener("change",async e=>{
+  if(!e.target.value) return;
+  const r=await fetch("/api/load",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path:e.target.value})});
+  const d=await r.json();
+  if(d.ok){ loadGraph(d.graph); document.getElementById("savepath").value=e.target.value;
+    toast("opened "+e.target.value);} else toast("load error: "+d.error);
+});
+document.getElementById("btnSave").addEventListener("click",async ()=>{
+  const graph=buildGraph();
+  const path=document.getElementById("savepath").value.trim();
+  const r=await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({graph,path})});
+  const d=await r.json();
+  if(!d.ok){ toast("save failed: "+d.error); return; }
+  if(d.issues&&d.issues.length){ toast("saved with "+d.issues.length+" issue(s)");
+    d.issues.forEach(i=>logln("err","⚠ "+i)); }
+  else toast("✓ saved → "+d.path);
+});
+
+// ---- run a command through the saved graph (SSE over fetch) ----------------
+async function runCommand(){
+  // always save first so the run uses the on-canvas graph
+  const graph=buildGraph();
+  const path=document.getElementById("savepath").value.trim();
+  const sv=await (await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({graph,path})})).json();
+  if(!sv.ok){ toast("save failed: "+sv.error); return; }
+  clearLog();
+  const body={command:document.getElementById("cmd").value,path:sv.path,
+    backend:document.getElementById("backend").value,
+    supervise:document.getElementById("supervise").checked,
+    allow_execution:document.getElementById("allowexec").checked};
+  logln("route","▶ "+body.command);
+  const resp=await fetch("/api/run",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body)});
+  const reader=resp.body.getReader(); const dec=new TextDecoder(); let buf="";
+  while(true){
+    const {value,done}=await reader.read(); if(done) break;
+    buf+=dec.decode(value,{stream:true});
+    const parts=buf.split("\n\n"); buf=parts.pop();
+    for(const p of parts){
+      let ev="message",data="{}";
+      p.split("\n").forEach(line=>{
+        if(line.startsWith("event:"))ev=line.slice(6).trim();
+        if(line.startsWith("data:"))data=line.slice(5).trim();
+      });
+      let d={}; try{d=JSON.parse(data);}catch(e){}
+      renderEvent(ev,d);
+    }
+  }
+}
+function renderEvent(ev,d){
+  if(ev==="route"){ const sc=Object.entries(d.scores||{}).filter(([k,v])=>v>0)
+      .map(([k,v])=>k+"="+v).join(" "); logln("route",`→ ${d.node||"∅"} (${d.title||""})  [${sc}]`); return; }
+  if(ev==="dispatch"){ logln("l0","🛰️ dispatch "+d.text); return; }
+  if(ev==="status"){ logln("tool",(d.layer===0?"🛰️ Atlas ":`L${d.layer} `)+"⏳ "+(d.text||"working…")); return; }
+  if(ev==="verdict"){ logln("verdict","🛰️ "+d.text); return; }
+  if(ev==="done"){ logln("tool","■ finished"); return; }
+  if(ev==="error"){ logln("err","✗ "+d.text); return; }
+  const who = d.layer===0?"l0":(ev==="reroute"?"reroute":(ev==="tool"?"tool":""));
+  const tag = d.layer===0?"🛰️ ":(`L${d.layer} `);
+  const txt=(d.text||"").replace(/\s+/g," ").slice(0,300);
+  if(ev==="text"||ev==="tool"||ev==="reroute"||ev==="result")
+    logln(who||"", tag+(ev==="reroute"?("↪ "+d.target+": "):"")+txt);
+}
+document.getElementById("btnRun").addEventListener("click",runCommand);
+document.getElementById("cmd").addEventListener("keydown",e=>{if(e.key==="Enter")runCommand();});
+
+// ===========================================================================
+//  Conversation mode: run turn-by-turn, show tools + outputs, pick next step
+// ===========================================================================
+let SID=null, curTurn=null, curTools=null;
+const msgs=()=>document.getElementById("msgs");
+function el(cls,html){const d=document.createElement("div");if(cls)d.className=cls;
+  if(html!=null)d.innerHTML=html;return d;}
+function scrollChat(){const m=msgs();m.scrollTop=m.scrollHeight;}
+
+async function streamSSE(url,body,onEvent){
+  const resp=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(body)});
+  const reader=resp.body.getReader();const dec=new TextDecoder();let buf="";
+  while(true){const {value,done}=await reader.read();if(done)break;
+    buf+=dec.decode(value,{stream:true});const parts=buf.split("\n\n");buf=parts.pop();
+    for(const p of parts){let ev="message",data="{}";
+      p.split("\n").forEach(l=>{if(l.startsWith("event:"))ev=l.slice(6).trim();
+        if(l.startsWith("data:"))data=l.slice(5).trim();});
+      let d={};try{d=JSON.parse(data);}catch(e){}
+      onEvent(ev,d);}}
+}
+
+function chatEvent(ev,d){
+  if(ev==="turn_start"){
+    curTurn=el("turn");curTools=null;
+    const r=d.retry?` <span class="tag">retry ${d.retry}</span>`:"";
+    curTurn.appendChild(el("divider",`<span>L${d.layer} · ${d.title}</span>${r}`));
+    msgs().appendChild(curTurn);scrollChat();return;
+  }
+  const host=curTurn||msgs();
+  const clearWorking=()=>{const w=host.querySelector(".working");if(w)w.remove();};
+  if(ev==="status"){
+    let w=host.querySelector(".working");
+    if(!w){w=el("bubble muted working");host.appendChild(w);}
+    w.textContent="⏳ "+(d.text||"working…");scrollChat();return;
+  }
+  if(ev==="tool"||ev==="atlas_tool"){
+    clearWorking();
+    if(!curTools){curTools=el("tools");host.appendChild(curTools);}
+    curTools.appendChild(el("toolchip",d.text));scrollChat();return;
+  }
+  if(ev==="text"||ev==="result"){
+    if(!(d.text||"").trim())return;curTools=null;clearWorking();
+    host.appendChild(el("bubble",escapeHtml(d.text)));scrollChat();return;
+  }
+  if(ev==="reroute"){host.appendChild(el("bubble muted","↪ worker suggests "+d.target+": "+escapeHtml(d.text||"")));scrollChat();return;}
+  if(ev==="atlas_start"){curTools=null;host.appendChild(el("divider",'<span>🛰️ Atlas · validating</span>'));scrollChat();return;}
+  if(ev==="atlas_text"){host.appendChild(el("bubble muted atlas",escapeHtml(d.text)));scrollChat();return;}
+  if(ev==="verdict"){host.appendChild(el("vcard v"+(d.status||"PASS"),"🛰️ "+escapeHtml(d.text)));scrollChat();return;}
+  if(ev==="choices"){renderChoices(d.items);return;}
+  if(ev==="error"){host.appendChild(el("errline","✗ "+escapeHtml(d.text)));scrollChat();return;}
+}
+function escapeHtml(s){return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+
+function renderChoices(items){
+  const card=el("choices");
+  card.appendChild(el("q","Select the next step — ★ is the LLM's recommendation"));
+  items.forEach(it=>{
+    const b=el("opt"+(it.recommended?" rec":""));
+    b.innerHTML=`<span>${escapeHtml(it.label)}</span>`+
+      (it.recommended?'<span class="pill">★ LLM choice</span>':'');
+    b.addEventListener("click",()=>{card.classList.add("locked");onChoice(it);});
+    card.appendChild(b);
+  });
+  (curTurn||msgs()).appendChild(card);scrollChat();
+}
+
+// agent dropdown options (Auto-route + each agent, incl. Atlas L0)
+const AGENTS=[["auto","🧭 Auto-route (let the router pick)"],
+  ["1","📦 L1 · Asset Placement"],["2","🧠 L2 · RL Authoring"],
+  ["3","🎭 L3 · Imitation Learning"],["4","⚙️ L4 · Execution"],
+  ["0","🛰️ L0 · Atlas (supervisor)"]];
+function agentOptions(sel){return AGENTS.map(([v,l])=>
+  `<option value="${v}"${v===sel?" selected":""}>${l}</option>`).join("");}
+
+let THREAD = localStorage.getItem("orch_thread");
+if(!THREAD||THREAD==="undefined"||THREAD==="null") THREAD=null;
+function setThreadLabel(){document.getElementById("threadlbl").textContent =
+  THREAD ? ("🧵 thread "+THREAD) : "🧵 new thread";}
+
+async function onChoice(it){
+  if(it.kind==="finish"){
+    (curTurn||msgs()).appendChild(el("divider",'<span>■ Conversation done · memory saved</span>'));
+    try{await fetch("/api/session/finish",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({session:SID,thread:THREAD})});}catch(e){}
+    addComposer();return;
+  }
+  const mode = it.kind==="retry"?"retry":(it.kind==="reroute"?"reroute":"manual");
+  stepChat(it.layer, mode, it.reason||"");
+}
+
+async function stepChat(layer,mode,reason){
+  curTools=null;
+  await streamSSE("/api/session/step",{session:SID,layer,mode,reason},chatEvent);
+}
+
+// one chat = one command submitted from a composer; it stacks under the prior one
+async function submitChat(cmd, agentVal){
+  cmd=(cmd||"").trim(); if(!cmd){toast("type a command");return;}
+  const graph=buildGraph();const path=document.getElementById("savepath").value.trim();
+  const who=AGENTS.find(a=>a[0]===agentVal);
+  const t=el("turn");
+  const tag=(agentVal&&agentVal!=="auto")?`<span class="tag">→ ${who?who[1]:agentVal}</span>`:"";
+  t.appendChild(el("usermsg",`<span>🧑 ${escapeHtml(cmd)}</span>${tag}`));
+  msgs().appendChild(t);curTurn=t;scrollChat();
+  const backend=(document.getElementById("chatbackend")||{}).value
+                || document.getElementById("backend").value;
+  const supEl=document.getElementById("chatsupervise"), exEl=document.getElementById("chatexec");
+  const r=await fetch("/api/session/start",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({graph,path,command:cmd,agent:agentVal,thread:THREAD,backend,
+      supervise:supEl?supEl.checked:document.getElementById("supervise").checked,
+      allow_execution:exEl?exEl.checked:document.getElementById("allowexec").checked})});
+  const d=await r.json();
+  if(!d.ok){t.appendChild(el("errline","✗ "+(d.error||"start failed")));addComposer();return;}
+  SID=d.session;
+  if(d.thread){THREAD=d.thread;localStorage.setItem("orch_thread",THREAD);}
+  setThreadLabel();
+  if(d.memory_turns) t.appendChild(el("memnote",`🧠 remembering ${d.memory_turns} earlier turn(s) in this thread`));
+  if(d.forced){
+    await stepChat(d.routed,"manual","");          // dropdown forced an agent → run it now
+  }else{
+    const sc=Object.entries(d.scores||{}).filter(([k,v])=>v>0).map(([k,v])=>k+"="+v).join("  ");
+    t.appendChild(el("divider",`<span>🧭 Router → L${d.routed} · ${d.title}</span> <span class="tag">${sc}</span>`));
+    renderChoices(d.choices);
+  }
+}
+
+function addComposer(){
+  const c=el("composer");
+  c.innerHTML=`<select class="cagent">${agentOptions("auto")}</select>`+
+    `<input class="cinput" type="text" placeholder="continue the thread… (memory persists)"/>`+
+    `<button class="csend go">▶ Send</button>`;
+  msgs().appendChild(c);
+  const inp=c.querySelector(".cinput"),selA=c.querySelector(".cagent"),btn=c.querySelector(".csend");
+  function go(){const v=inp.value,ag=selA.value;if(!v.trim())return;c.remove();submitChat(v,ag);}
+  btn.addEventListener("click",go);
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter")go();});
+  inp.focus();scrollChat();
+}
+
+function openChat(){
+  document.getElementById("chat").classList.add("show");
+  setThreadLabel();
+  if(!msgs().children.length){
+    addComposer();
+    const pre=document.getElementById("cmd").value;
+    if(pre){const inp=msgs().querySelector(".composer .cinput");if(inp)inp.value=pre;}
+  }
+}
+function newThread(){
+  THREAD=null;localStorage.removeItem("orch_thread");SID=null;setThreadLabel();
+  msgs().innerHTML="";addComposer();toast("started a fresh thread");
+}
+document.getElementById("btnChat").addEventListener("click",openChat);
+document.getElementById("chatBack").addEventListener("click",()=>document.getElementById("chat").classList.remove("show"));
+document.getElementById("newThread").addEventListener("click",newThread);
+
+init();
+</script>
+</body>
+</html>

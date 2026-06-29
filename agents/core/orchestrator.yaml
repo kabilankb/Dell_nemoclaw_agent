@@ -1,0 +1,116 @@
+# ============================================================================
+#  Agent Orchestrator — initial setup configuration  (NO CODE REQUIRED)
+# ============================================================================
+#
+#  Edit this one file to configure the 4-layer Isaac Sim / Isaac Lab agent
+#  orchestrator. No Python changes needed. The UI (app.py) and CLI (cli.py)
+#  both read these values at startup.
+#
+#  Precedence (highest wins):
+#       environment variable  >  this file  >  built-in default
+#  So an env var (e.g. ORCH_BACKEND, ISAAC_LAB_DIR) always overrides the value
+#  here — handy for one-off runs without editing the file.
+#
+#  This file is OPTIONAL. Delete it and the orchestrator falls back to the
+#  built-in defaults shown in the comments below. Point ORCH_CONFIG at a
+#  different path to use an alternate config file.
+# ============================================================================
+
+
+# ── Where Isaac lives ───────────────────────────────────────────────────────
+# Paths are only used if they exist on disk; a missing path is reported as
+# "NOT FOUND" in the UI's "resolved paths" box (it does not crash). Use ~ for
+# your home directory. workspace_dir may be repo-relative (resolved against the
+# repo root) or absolute.
+environment:
+  isaac_sim_dir: ~/IsaacSim                       # default: ~/IsaacSim (or repo _build/…)
+  isaac_lab_dir: ~/IsaacLab                       # default: ~/IsaacLab
+  workspace_dir: agent_orchestrator/workspace     # generated scripts/datasets/runs/logs
+
+
+# ── Which model the layer agents use ────────────────────────────────────────
+model:
+  id: claude-opus-4-8                             # default: claude-opus-4-8
+
+
+# ── How runs behave by default ──────────────────────────────────────────────
+runtime:
+  # Default execution backend when none is forced on the command line / UI:
+  #   dryrun   — route + plan only, NO API calls (safest for first setup)
+  #   sdk      — Claude Agent SDK (needs ANTHROPIC_API_KEY or logged-in `claude`)
+  #   openclaw — run each layer via `openclaw agent --local`
+  #   nemoclaw — run each layer inside a NemoClaw NIM sandbox (needs sandbox below)
+  backend: openclaw                               # local Gemma via OpenClaw/Ollama (built-in default: sdk)
+
+  dry_run: false            # force dry-run regardless of backend  (default: false)
+  allow_execution: true     # let Layer 4 run Bash (training/teleop) — needed for local-model execution
+  max_turns: 30             # max agent turns per layer for the SDK backend (default: 30)
+
+
+# ── Routing behaviour ───────────────────────────────────────────────────────
+routing:
+  # Layer used when no keyword matches. Default 1 (Asset/catalog — read-safe);
+  # when Atlas supervises, it re-decides ambiguous commands via dispatch rather
+  # than falling straight through. Avoid 4 (Execution can run Bash) as a default.
+  default_layer: 1          # default: 1 = Asset Placement / catalog
+  max_hops: 4               # max L4→Lx reroute hops before stopping (default: 4)
+
+  # No-code workflow graph. When true, the routing keywords + reroute wiring
+  # come from the drag-and-drop node graph below instead of the built-in tables.
+  # Edit nodes/edges there to rewire the orchestrator without touching code.
+  use_workflow: true
+  workflow: agent_orchestrator/workflows/default.workflow.yaml
+
+
+# ── Supervision (L0 "Atlas" master supervisor) ──────────────────────────────
+# Atlas wraps every run and validates whichever worker layer executed. It is
+# never auto-routed to — it monitors, emits a @@VERDICT, and may re-dispatch a
+# failed worker up to max_retries times. Env override: ORCH_SUPERVISE=0 disables.
+supervision:
+  enabled: true             # run Atlas validation after each worker (default: true)
+  use_llm: false            # local models are unreliable at the @@VERDICT protocol, so use
+                            # deterministic Isaac/Lab checks only (error signatures, claimed-
+                            # file existence, deprecated-import smell). Flip to true to also
+                            # ask the local model for a verdict.        (built-in default: true)
+  max_retries: 2            # times Atlas may re-dispatch a failed worker (default: 2)
+
+
+# ── Per-backend settings (only the active backend's block is used) ──────────
+backends:
+  openclaw:
+    # Local Ollama model OpenClaw runs each layer on (passed as `--model`). Must be
+    # declared in ~/.openclaw/openclaw.json models.providers.ollama.models AND pulled
+    # (`ollama pull gemma4:12b`). null = OpenClaw's configured default (ollama/gemma3:12b).
+    model: ollama/gemma4:12b
+    timeout: 900            # local models are slower than the cloud — give them headroom
+
+  nemoclaw:
+    sandbox: robotcontrol   # default sandbox (has the Isaac policies: isaaclab-zmq, hf, local-inference)
+    # Run the sandbox's OWN OpenClaw agent via the gateway's managed inference
+    # route. NOTE: `--local` is BLOCKED inside NemoClaw sandboxes (it bypasses the
+    # gateway's security), so use `--agent main` instead. The orchestrator base64-
+    # pipes the prompt on stdin, so `$(cat)` feeds it into `-m`.
+    agent_cmd: openclaw agent --agent main --json -m "$(cat)"
+    model: null             # null = use the sandbox's configured model (e.g. nemotron);
+                            # set ollama/<id> only if that model is pulled inside the sandbox
+    timeout: 900            # seconds for the in-sandbox exec
+
+
+# ── Auth ────────────────────────────────────────────────────────────────────
+# Leave null to use ANTHROPIC_API_KEY from your shell, or the logged-in `claude`
+# CLI session. Set a key here only if you cannot use the environment (it is
+# injected into the agent's env at run time). Do NOT commit a real key.
+auth:
+  anthropic_api_key: null
+
+
+# ── Reference: the four layers (read-only — informational) ───────────────────
+# These are defined by the markdown agent files under .claude/agents/ and are
+# shown here so the whole setup is visible in one place. Editing them here has
+# no effect; change the agent .md files to change a layer's behaviour.
+layers:
+  0: { name: Isaac Robot Orchestrator · Master, agent: isaac-robot-orchestrator-master-agent, permission: acceptEdits }
+  1: { name: Asset Placement,      agent: orch-l1-asset-placement, permission: acceptEdits }
+  2: { name: RL Authoring,         agent: orch-l2-rl-author,       permission: acceptEdits }
+  3: { name: Imitation Learning,   agent: orch-l3-il-author,       permission: acceptEdits }
+  4: { name: Execution,            agent: orch-l4-executor,        permission: bypassPermissions }

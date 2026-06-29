@@ -1,0 +1,17 @@
+# NemoClaw plugin manifest for the Isaac Agent Orchestrator.
+# Mirrors agents/hermes/plugin/plugin.yaml — exposes orchestrator control as
+# in-sandbox tools/hooks so the host agent can classify and dispatch.
+
+name: isaac-orchestrator
+version: "0.1.0"
+description: "Isaac 4-layer orchestrator control for an agent running inside OpenShell"
+author: "warehouse_nemoclaw"
+manifest_version: 1
+
+provides_tools:
+  - orchestrator_classify     # route a command → layer (free, no inference)
+  - orchestrator_dispatch     # run the classify→layer→reroute loop
+  - catalog_search            # resolve a friendly asset name in the L1 store
+
+provides_hooks:
+  - on_session_start

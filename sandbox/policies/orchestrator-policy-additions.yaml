@@ -1,0 +1,109 @@
+# Sandbox policy for the Isaac Agent Orchestrator.
+# Replicated from agents/hermes/policy-additions.yaml, adapted:
+#   - .isaac-orchestrator instead of .hermes
+#   - WORKSPACE_DIR is read_write (generated scripts / runs / datasets)
+#   - Anthropic + NVIDIA inference + Omniverse asset CDN egress (no Nous/messaging)
+#   - PyPI for pip installs
+#
+# Principle: deny by default, allow only what the orchestrator needs.
+
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /usr
+    - /lib
+    - /proc
+    - /dev/urandom
+    - /etc
+    - /var/log
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+    - /sandbox/.isaac-orchestrator        # agent config (lockable via shields up)
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  # ── Claude API — the `sdk` backend (claude-agent-sdk) ─────────
+  anthropic:
+    name: anthropic
+    endpoints:
+      - host: api.anthropic.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/messages" }
+          - allow: { method: POST, path: "/v1/messages/**" }
+          - allow: { method: GET, path: "/v1/models" }
+          - allow: { method: GET, path: "/v1/models/**" }
+    binaries:
+      - { path: /usr/bin/python3* }
+      - { path: /sandbox/warehouse_nemoclaw/agent_orchestrator/.venv/bin/python }
+
+  # ── NVIDIA NIM — the `nemoclaw` backend / managed inference ───
+  nvidia:
+    name: nvidia
+    endpoints:
+      - host: integrate.api.nvidia.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/chat/completions" }
+          - allow: { method: POST, path: "/v1/completions" }
+          - allow: { method: GET, path: "/v1/models" }
+          - allow: { method: GET, path: "/v1/models/**" }
+      - host: inference.local
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/chat/completions" }
+          - allow: { method: GET, path: "/v1/models" }
+    binaries:
+      - { path: /usr/bin/python3* }
+      - { path: /sandbox/warehouse_nemoclaw/agent_orchestrator/.venv/bin/python }
+
+  # ── Omniverse content — L1 resolves {ISAAC_NUCLEUS_DIR} assets ─
+  isaac_assets:
+    name: isaac_assets
+    endpoints:
+      - host: omniverse-content-production.s3.us-west-2.amazonaws.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+    binaries:
+      - { path: /usr/bin/python3* }
+      - { path: /sandbox/warehouse_nemoclaw/agent_orchestrator/.venv/bin/python }
+
+  # ── PyPI — needed for pip install (venv deps) ─────────────────
+  pypi:
+    name: pypi
+    endpoints:
+      - host: pypi.org
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+      - host: files.pythonhosted.org
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: GET, path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/pip3 }
+      - { path: /usr/bin/python3* }
+      - { path: /sandbox/warehouse_nemoclaw/agent_orchestrator/.venv/bin/python }

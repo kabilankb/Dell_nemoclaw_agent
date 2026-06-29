@@ -1,0 +1,40 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+
+# --- Heavy binary assets (kept on disk for runtime, NOT committed) ---
+# Robot meshes/USDs shipped with the robot_lab extension (~450 MB)
+isaac_lab/source/robot_lab/data/
+# Generated/CC0 scene textures (~150 MB) and built scene USDs (~38 MB)
+isaac_sim/scenes/textures/
+isaac_sim/scenes/*.usd
+isaac_sim/scenes/*.usda
+isaac_sim/scenes/*.usdc
+# Regenerate scenes with isaac_sim/scripts/build_warehouse.py + gen_textures*.py
+
+# --- Datasets & training artifacts (never commit) ---
+datasets/
+*.hdf5
+*.h5
+**/logs/
+**/outputs/
+**/runs/
+*.pt
+*.ckpt
+*.onnx
+
+# --- Runtime scratch ---
+isaac_sim/_control_logs/
+agents/core/workspace/runs/
+agents/core/workspace/datasets/
+agents/core/workspace/logs/
+
+# --- OS / editor ---
+.DS_Store
+*.swp

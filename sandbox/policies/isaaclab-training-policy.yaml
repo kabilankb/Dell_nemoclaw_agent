@@ -1,0 +1,27 @@
+preset:
+  name: isaaclab-training
+network_policies:
+  isaaclab-training:
+    name: isaaclab-training
+    endpoints:
+      - host: host.openshell.internal
+        port: 5561
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow:
+              method: GET
+              path: /**
+          - allow:
+              method: POST
+              path: /**
+        allowed_ips:
+          - '10.0.0.0/8'
+          - '172.16.0.0/12'
+          - '192.168.0.0/16'
+    binaries:
+      - path: /usr/bin/python3*
+      - path: /usr/local/bin/python3*
+      - path: /usr/local/bin/node*
+      - path: /usr/bin/node*
+      - path: /sandbox/bin/isaaclab-train

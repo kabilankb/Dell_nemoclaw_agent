@@ -1,0 +1,22 @@
+## Final Scene USD Output
+
+# This file represents the generated, complete, and idempotent USD scene.
+# It includes the base 'office' environment and the placed 'unitree_g1' robot.
+
+# @namespace (The service/system should prepend this or handle it)
+
+# --- START OF STAGE DATA ---
+
+# 1. Environment (Office Base) 
+# This prim represents the environment and contains the necessary scale/collision definitions.
+# Path: /World/Environment/office_prim
+# ... [USD content for office.usd] ...
+
+# 2. Robot Placement 
+# Path: /World/Robot/unitree_g1
+# This prim references the unitree_g1 asset and places it using T*R*S transforms.
+# Transforms: Translate(2.0, 0.0, 0.74)
+# References: {ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/G1/g1.usd
+
+# --- END OF STAGE DATA ---
+

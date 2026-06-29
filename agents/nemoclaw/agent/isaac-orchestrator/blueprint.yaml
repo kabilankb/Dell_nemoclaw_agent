@@ -1,0 +1,73 @@
+# NemoClaw Blueprint for the Isaac Agent Orchestrator.
+# Validates against schemas/blueprint.schema.json. This is the *replication
+# artifact*: a declarative definition that lets NemoClaw stamp out this agent as
+# a sandbox (image + inference profiles + router + policy), the same way
+# nemoclaw-blueprint/blueprint.yaml defines the stock OpenClaw sandbox.
+#
+# Replicate with:  nemoclaw onboard --from <Dockerfile that bakes this repo>
+# then the sandbox runs this agent's start.sh as its gateway service.
+
+version: "0.1.0"
+min_openclaw_version: "2026.5.18"
+
+description: |
+  Isaac Agent Orchestrator blueprint: a 4-layer Isaac Sim/Lab agent
+  (asset placement, RL authoring, imitation-learning authoring, execution)
+  packaged as a NemoClaw sandbox with NVIDIA/Anthropic inference routing.
+
+profiles:
+  - default
+  - nim-local
+  - claude
+
+components:
+  sandbox:
+    # Build from a Dockerfile that layers this repo + its venv onto the base
+    # sandbox image; pin to a digest at release time (see nemoclaw-blueprint).
+    image: "ghcr.io/nvidia/openshell-community/sandboxes/openclaw:latest"
+    name: "isaac-orchestrator"
+    forward_ports:
+      - 7860            # Gradio dashboard (manifest health-probe port)
+
+  inference:
+    profiles:
+      default:
+        provider_type: "nvidia"
+        provider_name: "nvidia-inference"
+        endpoint: "https://integrate.api.nvidia.com/v1"
+        model: "nvidia/nemotron-3-super-120b-a12b"
+
+      nim-local:
+        provider_type: "openai"
+        provider_name: "nim-local"
+        endpoint: "http://nim-service.local:8000/v1"
+        model: "nvidia/nemotron-3-super-120b-a12b"
+        credential_env: "NIM_API_KEY"
+        timeout_secs: 180
+
+      # The orchestrator's native sdk backend (claude-agent-sdk).
+      claude:
+        provider_type: "anthropic"
+        provider_name: "anthropic"
+        endpoint: "https://api.anthropic.com"
+        model: "claude-opus-4-8"
+        credential_env: "ANTHROPIC_API_KEY"
+        timeout_secs: 300
+
+  policy:
+    base: "sandboxes/openclaw/policy.yaml"
+    additions:
+      isaac_orchestrator:
+        name: isaac_orchestrator
+        # See policy-additions.yaml for the full egress allowlist
+        # (anthropic, nvidia, isaac_assets, pypi).
+        endpoints:
+          - host: "api.anthropic.com"
+            port: 443
+            access: full
+          - host: "integrate.api.nvidia.com"
+            port: 443
+            access: full
+          - host: "omniverse-content-production.s3.us-west-2.amazonaws.com"
+            port: 443
+            access: full

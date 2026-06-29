@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+"""Read YOLO orange detections from the LeIsaac vision publisher.
+
+Fetches the latest detection data via HTTP from the VisionPublisher and
+prints an LLM-friendly report with positions, distances, and recommended
+movement commands for each orange.
+"""
+
+import json
+import sys
+import urllib.request
+
+HOST = "host.openshell.internal"
+HTTP_PORT = 5560
+
+
+def decompose_relative(rel, forward_dir):
+    fx, fy = forward_dir
+    right_x, right_y = fy, -fx
+
+    dx, dy, dz = rel[0], rel[1], rel[2]
+
+    fwd_dist = dx * fx + dy * fy
+    lat_dist = dx * right_x + dy * right_y
+    vert_dist = dz
+
+    commands = []
+    if abs(fwd_dist) > 0.01:
+        direction = "forward" if fwd_dist > 0 else "backward"
+        commands.append(f"{direction} {abs(fwd_dist):.2f}")
+    if abs(lat_dist) > 0.01:
+        direction = "right" if lat_dist > 0 else "left"
+        commands.append(f"{direction} {abs(lat_dist):.2f}")
+    if abs(vert_dist) > 0.01:
+        direction = "up" if vert_dist > 0 else "down"
+        commands.append(f"{direction} {abs(vert_dist):.2f}")
+
+    return commands
+
+
+def format_report(data):
+    lines = []
+    lines.append("=== Vision Detection Report ===")
+    lines.append(f"Gripper position: {fmt_pos(data['gripper_pos'])}")
+    lines.append("")
+
+    fwd_dir = data.get("robot_forward_dir", [1.0, 0.0])
+
+    unpicked = []
+    for o in data.get("oranges", []):
+        status = "ON PLATE" if o["on_plate"] else ("PICKED" if o["picked"] else "NOT PICKED")
+        lines.append(f"--- {o['id']} [{status}] ---")
+        if o["on_plate"]:
+            lines.append("  (completed)")
+        else:
+            lines.append(f"  World pos:  {fmt_pos(o['world_pos'])}")
+            lines.append(f"  Distance:   {o['distance']:.3f}m")
+            cmds = decompose_relative(o["relative_pos"], fwd_dir)
+            if cmds:
+                lines.append(f"  Commands:   {', '.join(cmds)}")
+            if not o["picked"]:
+                unpicked.append((o["id"], o["distance"]))
+        lines.append("")
+
+    plate = data.get("plate")
+    if plate:
+        lines.append("--- Plate ---")
+        lines.append(f"  World pos:  {fmt_pos(plate['world_pos'])}")
+        lines.append(f"  Distance:   {plate['distance']:.3f}m")
+        cmds = decompose_relative(plate["relative_pos"], fwd_dir)
+        if cmds:
+            lines.append(f"  Commands:   {', '.join(cmds)}")
+        lines.append("")
+
+    yolo_count = data.get("yolo_count", 0)
+    lines.append(f"YOLO detections: {yolo_count} orange(s) visible in camera")
+    for det in data.get("yolo_detections", []):
+        lines.append(f"  conf={det['confidence']:.0%} center=({det['center'][0]:.0f}, {det['center'][1]:.0f})")
+    lines.append("")
+
+    if unpicked:
+        unpicked.sort(key=lambda x: x[1])
+        lines.append(f"Next target: {unpicked[0][0]} (closest unpicked, {unpicked[0][1]:.3f}m away)")
+    else:
+        all_on_plate = all(o["on_plate"] for o in data.get("oranges", []))
+        if all_on_plate:
+            lines.append("All oranges are on the plate! Task complete.")
+        else:
+            lines.append("All oranges picked. Move to plate and place them.")
+
+    return "\n".join(lines)
+
+
+def fmt_pos(pos):
+    return f"[{pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f}]"
+
+
+def main():
+    timeout = 5
+    if len(sys.argv) > 1:
+        try:
+            timeout = int(sys.argv[1])
+        except ValueError:
+            pass
+
+    url = f"http://{HOST}:{HTTP_PORT}/detect"
+    try:
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            print(format_report(data))
+    except Exception as e:
+        print(f"No vision data received ({e}). Is the simulation running with --enable_vision?")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

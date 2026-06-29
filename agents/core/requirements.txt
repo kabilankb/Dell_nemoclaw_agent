@@ -1,0 +1,8 @@
+# Isaac agent orchestrator
+gradio>=4.44
+claude-agent-sdk>=0.1.0
+PyYAML>=6.0
+# Visual workflow editor (editor.py). Usually already present via gradio.
+fastapi>=0.110
+uvicorn>=0.27
+# (anthropic is pulled in transitively / already present)

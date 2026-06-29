@@ -1,0 +1,235 @@
+# Common asset store for Layer 1 (Asset Placement).
+#
+# One catalog, organized by category. Each entry maps a friendly `name` to a
+# resolvable USD reference plus placement hints. USD paths use Isaac Lab's
+# Nucleus tokens ({ISAAC_NUCLEUS_DIR}, {ISAACLAB_NUCLEUS_DIR}) which resolve at
+# runtime inside Isaac Sim / Isaac Lab, or a repo-relative path for local USDs.
+#
+# Placement hints (start_z, drive, default_scale, separation_m) come from the
+# isaac-sim-orchestrator skill's multi-robot fleet reference so the placement
+# agent positions things correctly without re-deriving them.
+
+meta:
+  nucleus_tokens:
+    ISAAC_NUCLEUS_DIR: "{NUCLEUS_ASSET_ROOT_DIR}/Isaac"
+    ISAACLAB_NUCLEUS_DIR: "{NUCLEUS_ASSET_ROOT_DIR}/Isaac/IsaacLab"
+  notes: >
+    NUCLEUS_ASSET_ROOT_DIR resolves from carb setting
+    /persistent/isaac/asset_root/cloud at sim runtime. Robots are in meters;
+    warehouse shells are often in cm (scale 0.01).
+  local_store: >
+    Locally-owned USD assets live under assets/store/<category>/ (a real,
+    categorized on-disk store). Entries with relative_to: repo and a path under
+    assets/store/ point there. Drop a USD into the matching category folder and
+    add a catalog entry to register it.
+
+categories:
+
+  robots:
+    nova_carter:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/NVIDIA/NovaCarter/nova_carter.usd"
+      drive: differential
+      start_z: 0.0
+      separation_m: 2.0
+      tags: [mobile, amr, warehouse, ros2]
+      notes: "wheel radius 0.14 m, track 0.499 m; differential drive AMR"
+    franka_panda:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/FrankaEmika/panda_instanceable.usd"
+      drive: fixed-base
+      start_z: 0.0
+      separation_m: 1.5
+      tags: [manipulator, arm, 7dof, ik, manipulation]
+      notes: "end-effector only; not mobile. separation = 1.5x reach"
+    franka_robotiq:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/FrankaRobotics/FrankaPanda/franka.usd"
+      drive: fixed-base
+      start_z: 0.0
+      tags: [manipulator, arm, gripper, robotiq]
+    ur10:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur10/ur10.usd"
+      drive: fixed-base
+      start_z: 0.0
+      tags: [manipulator, arm, industrial]
+    ur10e:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur10e/ur10e.usd"
+      drive: fixed-base
+      tags: [manipulator, arm, industrial]
+    kinova_gen3:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/Kinova/Gen3/gen3n7_instanceable.usd"
+      drive: fixed-base
+      tags: [manipulator, arm, 7dof]
+    spot:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/BostonDynamics/spot/spot.usd"
+      drive: legged
+      start_z: 0.75
+      separation_m: 2.0
+      tags: [quadruped, legged, locomotion]
+      notes: "bbox min Z = -0.69; needs ground clearance, start_z 0.75"
+    anymal:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/ANYbotics/anymal_instanceable.usd"
+      drive: legged
+      start_z: 0.6
+      tags: [quadruped, legged, locomotion]
+    shadow_hand:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/ShadowRobot/ShadowHand/shadow_hand_instanceable.usd"
+      drive: fixed-base
+      tags: [hand, dexterous, manipulation]
+    allegro_hand:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/WonikRobotics/AllegroHand/allegro_hand_instanceable.usd"
+      drive: fixed-base
+      tags: [hand, dexterous, manipulation]
+    crazyflie:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/Bitcraze/Crazyflie/cf2x.usd"
+      drive: aerial
+      start_z: 1.0
+      separation_m: 2.0
+      tags: [drone, quadcopter, aerial]
+      notes: "stagger altitudes by >= 2 m for fleets"
+    sawyer:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/RethinkRobotics/Sawyer/sawyer_instanceable.usd"
+      drive: fixed-base
+      tags: [manipulator, arm]
+    ridgeback_franka:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/Clearpath/RidgebackFranka/ridgeback_franka.usd"
+      drive: holonomic
+      start_z: 0.0
+      tags: [mobile-manipulator, arm, base]
+
+  humanoids:
+    # All humanoid/biped robot USDs registered in the local Isaac Lab checkout.
+    # start_z = each config's init_state.pos z (authoritative ground clearance).
+    unitree_g1:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/G1/g1.usd"
+      drive: legged
+      start_z: 0.74
+      separation_m: 2.0
+      tags: [humanoid, biped, locomotion, unitree, 23dof]
+      notes: "Unitree G1 (23-DOF)"
+    unitree_g1_minimal:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/G1/g1_minimal.usd"
+      drive: legged
+      start_z: 0.74
+      tags: [humanoid, biped, locomotion, unitree, minimal]
+      notes: "G1 minimal-collision variant (faster RL)"
+    unitree_g1_29dof:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/Unitree/G1/g1.usd"
+      drive: legged
+      start_z: 0.75
+      tags: [humanoid, biped, locomotion, unitree, 29dof]
+      notes: "Unitree G1 29-DOF config"
+    unitree_g1_inspire_hand:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/G1/g1_29dof_inspire_hand.usd"
+      drive: legged
+      start_z: 1.0
+      tags: [humanoid, biped, manipulation, unitree, hands, inspire]
+      notes: "G1 29-DOF with Inspire dexterous hands"
+    unitree_h1:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/H1/h1.usd"
+      drive: legged
+      start_z: 1.05
+      separation_m: 2.0
+      tags: [humanoid, biped, locomotion, unitree]
+      notes: "Unitree H1"
+    unitree_h1_minimal:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Unitree/H1/h1_minimal.usd"
+      drive: legged
+      start_z: 1.05
+      tags: [humanoid, biped, locomotion, unitree, minimal]
+      notes: "H1 minimal-collision variant"
+    digit_v4:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/Agility/Digit/digit_v4.usd"
+      drive: legged
+      start_z: 1.05
+      separation_m: 2.0
+      tags: [humanoid, biped, locomotion, agility]
+      notes: "Agility Robotics Digit v4"
+    cassie:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Agility/Cassie/cassie.usd"
+      drive: legged
+      start_z: 0.9
+      tags: [humanoid, biped, locomotion, agility]
+      notes: "Agility Cassie (bipedal legs)"
+    fourier_gr1t2:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/FourierIntelligence/GR-1/GR1T2_fourier_hand_6dof/GR1T2_fourier_hand_6dof.usd"
+      drive: legged
+      start_z: 0.95
+      tags: [humanoid, biped, manipulation, hands, fourier]
+      notes: "Fourier GR-1 T2 with 6-DOF hands"
+    agibot_a2d:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Agibot/A2D/A2D_physics.usd"
+      drive: wheeled
+      start_z: 0.0
+      tags: [humanoid, mobile-manipulator, dual-arm, agibot]
+      notes: "Agibot A2D wheeled humanoid; config uses a teleop pos offset, place at z=0 on ground"
+    galbot_one_charlie:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Galbot/galbot_one_charlie/galbot_one_charlie.usd"
+      drive: wheeled
+      start_z: 0.0
+      tags: [humanoid, mobile-manipulator, galbot]
+      notes: "Galbot One Charlie wheeled humanoid manipulator; place at z=0 on ground"
+    humanoid_mjcf:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/IsaacSim/Humanoid/humanoid_instanceable.usd"
+      drive: legged
+      start_z: 1.34
+      tags: [humanoid, locomotion, classic, mjcf, rl-benchmark]
+      notes: "IsaacSim classic 21-DOF Humanoid (MuJoCo-style RL benchmark)"
+    humanoid_28:
+      usd: "{ISAACLAB_NUCLEUS_DIR}/Robots/Classic/Humanoid28/humanoid_28.usd"
+      drive: legged
+      start_z: 0.8
+      tags: [humanoid, locomotion, classic, 28dof, rl-benchmark]
+      notes: "28-DOF classic humanoid RL benchmark"
+
+  environments:
+    warehouse_local:
+      usd: "agent_orchestrator/assets/store/environments/warehouse.usd"
+      relative_to: repo
+      scale: 1.0
+      tags: [warehouse, indoor, repo, stored]
+      notes: >
+        This repo's authored warehouse scene, copied into the local asset store
+        (assets/store/environments/). Textures resolve via absolute paths under
+        warehouse_scene/textures/, so the stored copy is self-sufficient.
+    warehouse_full:
+      usd: "{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/full_warehouse.usd"
+      scale: 1.0
+      tags: [warehouse, indoor]
+    warehouse_shell:
+      usd: "{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd"
+      tags: [warehouse, indoor]
+    grid_room:
+      usd: "{ISAAC_NUCLEUS_DIR}/Environments/Grid/default_environment.usd"
+      tags: [empty, ground, gridroom]
+    office:
+      usd: "{ISAAC_NUCLEUS_DIR}/Environments/Office/office.usd"
+      tags: [indoor, office]
+    hospital:
+      usd: "{ISAAC_NUCLEUS_DIR}/Environments/Hospital/hospital.usd"
+      tags: [indoor, hospital]
+
+  props:
+    cardboard_box:
+      usd: "{ISAAC_NUCLEUS_DIR}/Props/KLT_Bin/small_KLT.usd"
+      tags: [box, bin, manipulable, payload]
+    pallet:
+      usd: "{ISAAC_NUCLEUS_DIR}/Props/Pallet/pallet.usd"
+      tags: [pallet, warehouse, payload]
+    rack:
+      usd: "{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/Props/SM_RackLongA01.usd"
+      tags: [rack, shelf, warehouse]
+    block:
+      usd: "{ISAAC_NUCLEUS_DIR}/Props/Blocks/basic_block.usd"
+      tags: [block, cube, manipulable]
+    table:
+      usd: "{ISAAC_NUCLEUS_DIR}/Props/Mounts/SeattleLabTable/table_instanceable.usd"
+      tags: [table, surface, manipulation]
+
+  sensors:
+    rtx_lidar_ouster:
+      usd: "{ISAAC_NUCLEUS_DIR}/Sensors/Ouster/OS0/OS0_128.usd"
+      tags: [lidar, rtx, perception]
+    camera_hawk:
+      usd: "{ISAAC_NUCLEUS_DIR}/Sensors/LeopardImaging/Hawk/hawk_v1.1_nominal.usd"
+      tags: [camera, stereo, perception]
+    # Programmatic sensors (Camera, IMU, ContactSensor) are spawned via the
+    # isaac-sim-sensor skill rather than referenced as USD; see L1 agent prompt.

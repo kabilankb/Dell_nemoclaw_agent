@@ -1,0 +1,40 @@
+# NemoClaw inference profile for isaac-claw.
+#
+# NemoClaw wraps OpenClaw inside an OpenShell sandbox with policy-controlled
+# network egress, and routes inference to NVIDIA Nemotron (cloud, NCP, or a
+# local NIM/vLLM). Merge these 'profiles' into the NemoClaw blueprint.yaml used
+# by `nemoclaw onboard`, or keep this file as the isaac-claw source of truth.
+#
+# Switch model by selecting a profile at onboard time, or `openshell policy set`.
+
+profiles:
+  - default       # NVIDIA cloud Nemotron (needs NVIDIA_API_KEY)
+  - nim-local     # local NIM container
+  - vllm          # local vLLM server
+
+components:
+  inference:
+    profiles:
+      default:
+        provider_type: "nvidia"
+        endpoint: "https://integrate.api.nvidia.com/v1"
+        model: "nvidia/nemotron-3-super-120b-a12b"
+        credential_env: "NVIDIA_API_KEY"
+      nim-local:
+        provider_type: "openai"
+        endpoint: "http://nim-service.local:8000/v1"
+        model: "nvidia/nemotron-3-super-120b-a12b"
+      vllm:
+        provider_type: "openai"
+        endpoint: "http://localhost:8000/v1"
+        model: "nvidia/nemotron-3-super-120b-a12b"
+
+  # The sandbox must be allowed to reach the host Isaac Control Server. This
+  # references the shared policy in ../../sandbox/policies/ — keep them in sync.
+  policy:
+    additions:
+      isaac_control:
+        endpoints:
+          - host: "host.openshell.internal"
+            port: 5561
+            protocol: rest

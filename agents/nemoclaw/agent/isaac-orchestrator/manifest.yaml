@@ -1,0 +1,113 @@
+# Agent manifest for the Isaac Agent Orchestrator.
+# Declares the integration contract between NemoClaw and the sandboxed agent —
+# a faithful replication of agents/hermes/manifest.yaml adapted from the Hermes
+# (Nous Research) agent to this repo's 4-layer Isaac Sim/Lab orchestrator.
+
+name: isaac-orchestrator
+display_name: "Isaac Agent Orchestrator"
+description: "4-layer Isaac Sim/Lab orchestrator — L1 asset placement, L2 RL authoring, L3 imitation-learning authoring, L4 execution + reroute"
+version_constraint: ">=0.1.0"
+language: python
+license: Apache-2.0
+homepage: "https://github.com/NVIDIA/warehouse_nemoclaw"
+
+# ── Binary & process ────────────────────────────────────────────
+# Unlike Hermes (a single installed binary), this agent IS this repo's Python
+# package, run from its isolated venv (gradio deps conflict with base lerobot).
+install_method: pip                       # python -m venv + pip install -r requirements.txt
+binary_path: /sandbox/warehouse_nemoclaw/agent_orchestrator/.venv/bin/python
+version_command: "python -m agent_orchestrator.cli --classify ping"
+expected_version: "0.1.0"
+gateway_command: "bash agent_orchestrator/nemoclaw/agent/isaac-orchestrator/start.sh"
+
+# ── Health probe ────────────────────────────────────────────────
+# The orchestrator's always-on service is the Gradio dashboard (app.py). Gradio
+# serves GET / (HTML 200) and GET /config (JSON) once booted.
+health_probe:
+  url: "http://localhost:7860/config"
+  port: 7860
+  timeout_seconds: 120
+
+# ── Dashboard / UI ──────────────────────────────────────────────
+# Hermes exposes an OpenAI-compatible API; this agent exposes a Gradio web UI
+# (orchestrator + asset-catalog tabs) on 7860.
+dashboard:
+  kind: ui                       # "ui" or "api"
+  label: "Orchestrator dashboard (Gradio)"
+  path: "/"
+forward_ports:
+  - 7860
+
+# ── Configuration ───────────────────────────────────────────────
+# The orchestrator is env-driven (no JSON/YAML config file). The env contract is
+# the unit of configuration; outputs land under WORKSPACE_DIR.
+config:
+  dir: /sandbox/.isaac-orchestrator
+  config_file: null               # env-driven; see env_contract below
+  env_file: .env                  # ISAAC_*/ORCH_*/NEMOCLAW_* overrides
+  format: env
+env_contract:
+  - ISAAC_SIM_DIR                 # Isaac Sim install / built repo
+  - ISAAC_LAB_DIR                 # Isaac Lab checkout
+  - WORKSPACE_DIR                 # generated scripts / runs / datasets
+  - ORCH_MODEL                    # default claude-opus-4-8
+  - ORCH_BACKEND                  # dryrun | sdk | openclaw | nemoclaw
+  - ANTHROPIC_API_KEY             # for the sdk backend
+  - NEMOCLAW_SANDBOX              # for the nemoclaw backend (no default)
+
+# ── State directories ──────────────────────────────────────────
+# Mirror of WORKSPACE_DIR's tree (config.ensure_workspace + L1's scene dir).
+# Preserved across rebuilds so generated scripts / runs / datasets survive.
+state_dirs:
+  - generated/rl                 # L2 RL scripts
+  - generated/il                 # L3 imitation-learning pipelines
+  - generated/scene              # L1 placement scripts + composed .usd stages
+  - runs                         # L4 training runs / checkpoints
+  - datasets                     # L4 collected demos / recorded datasets
+  - logs
+
+# ── Top-level durable state files ───────────────────────────────
+state_files:
+  - path: agent_orchestrator/assets/catalog.yaml   # L1 asset store (source of truth)
+
+# ── Authentication ──────────────────────────────────────────────
+# No browser device pairing. The Gradio UI has no built-in auth; in a sandbox it
+# is reached only through the OpenShell gateway tunnel (gateway-token).
+device_pairing: false
+web_auth_method: gateway_tunnel
+web_auth_env: null
+
+# ── Messaging platforms ─────────────────────────────────────────
+# Not applicable — this agent is driven by the dashboard / CLI, not chat channels.
+messaging_platforms:
+  supported: []
+
+# ── Inference ───────────────────────────────────────────────────
+# The orchestrator does not call inference directly; each layer runs through a
+# pluggable backend (runner.get_executor): the Claude Agent SDK, OpenClaw, or a
+# NemoClaw sandbox. "custom" base_url routes through OpenShell's proxy.
+inference:
+  provider_type: custom
+  base_url_config_key: "ANTHROPIC_BASE_URL"
+  model_config_key: "ORCH_MODEL"
+  proxy_support: implicit
+  provider_options:
+    - sdk            # claude-agent-sdk (ANTHROPIC_API_KEY)
+    - openclaw       # openclaw agent --local
+    - nemoclaw       # nemoclaw <sandbox> exec
+    - dryrun         # plan only, no inference
+
+# ── Phone-home hosts ───────────────────────────────────────────
+# Agent-specific egress: Claude API (sdk backend), NVIDIA NIM (nemoclaw backend),
+# and the Omniverse content server (L1 resolves {ISAAC_NUCLEUS_DIR} assets).
+phone_home_hosts:
+  - api.anthropic.com
+  - integrate.api.nvidia.com
+  - omniverse-content-production.s3.us-west-2.amazonaws.com
+
+# ── Package registry ───────────────────────────────────────────
+package_registry:
+  hosts:
+    - pypi.org
+    - files.pythonhosted.org
+  binary: /usr/local/bin/pip3

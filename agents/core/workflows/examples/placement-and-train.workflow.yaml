@@ -1,0 +1,59 @@
+name: Placement + Train (rewired)
+description: Built in the visual editor.
+agents: {}
+nodes:
+- id: start
+  type: trigger
+  title: Command In
+  icon: ⌨️
+  color: '#64748b'
+  position:
+    x: 40
+    y: 200
+- id: place
+  type: agent
+  title: Asset Placement
+  key: assets
+  layer: 1
+  agent: asset-placement
+  color: '#64748b'
+  position:
+    x: 772
+    y: 189
+  match:
+  - \bplace\b: 2.0
+  - \bspawn\b: 2.0
+  - \barrange\b: 1.5
+  - \bwarehouse\b: 1.0
+  - \busd\b: 1.5
+  - \barticulation\b: 1.5
+- id: exec
+  type: agent
+  title: Execution
+  key: exec
+  layer: 4
+  agent: executor
+  color: '#64748b'
+  position:
+    x: 369
+    y: 438
+  match:
+  - \btrain\b: 2.0
+  - \bexecute\b: 2.0
+  - \binference\b|\beval: 1.8
+  - collect.*(dataset|demos|data): 2.0
+  - \bteleop(?:erat)?: 1.8
+edges:
+- from: start
+  to: place
+  type: route
+- from: start
+  to: exec
+  type: route
+- from: exec
+  to: place
+  type: reroute
+  signal: assets
+settings:
+  max_hops: 4
+  max_retries: 2

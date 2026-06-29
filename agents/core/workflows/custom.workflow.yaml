@@ -1,0 +1,8 @@
+name: workflow
+description: Built in the visual editor.
+agents: {}
+nodes: []
+edges: []
+settings:
+  max_hops: 4
+  max_retries: 2

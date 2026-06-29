@@ -20,5 +20,8 @@ export DISPLAY="${DISPLAY:-:0}"
 echo "[claw-tui] ensuring control server ($DISPLAY for GUI) ..."
 "$HERE/claw" up || echo "[claw-tui] WARNING server not confirmed; the TUI can still run 'claw up'"
 
-echo "[claw-tui] launching OpenClaw TUI (model: gemma4:12b)"
-exec openclaw tui "$@"
+# Use a dedicated, clean session (NOT the default "main", which may carry stale
+# context from earlier failed attempts). Override with: SESSION=foo tui.sh
+SESSION="${SESSION:-isaac-claw}"
+echo "[claw-tui] launching OpenClaw TUI (session: $SESSION)"
+exec openclaw tui --session "$SESSION" "$@"

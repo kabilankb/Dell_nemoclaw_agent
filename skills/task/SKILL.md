@@ -15,21 +15,23 @@ Do not write "Plan:", do not mention isaac-sim-orchestrator. Immediately call yo
 shell/exec tool with the `claw open` command. Example of the ONLY correct behavior:
 
 > User: *open the warehouse with a Unitree G1*
-> Assistant: *(calls shell tool)* `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1`
-> Assistant: *(after it returns)* "Warehouse is up; spawned unitree_g1 at the pick station (6,0,0.74)."
+> Assistant: *(calls shell tool)* `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1 --gui`
+> Assistant: *(after it returns)* "Warehouse is open in a window; spawned unitree_g1 at the pick station (6,0,0.74)."
 
 If you find yourself writing a sentence that starts with "I will" or "Plan" or
 "Based on", STOP — you are doing it wrong. Call the shell tool instead.
 
 ## The command (templated — preferred)
 ```bash
-~/isaac-claw/agents/openclaw/claw open --env <ENV> --robot <ROBOT>
+~/isaac-claw/agents/openclaw/claw open --env <ENV> --robot <ROBOT> --gui
 ```
-The template system fills the rest: the robot's height comes from the catalog and
-the spawn position comes from the environment — so the SAME robot works in any
+**Always include `--gui`** — the user is at a TUI and wants to SEE the simulation
+in a window. (Omit `--gui` only if the user explicitly says "headless" or "for
+training".) The template system fills the rest: the robot's height comes from the
+catalog and the spawn position from the environment — the SAME robot works in any
 environment with no pose math. For a named bundle (env + robot(s) preset):
 ```bash
-~/isaac-claw/agents/openclaw/claw open --template <TEMPLATE>
+~/isaac-claw/agents/openclaw/claw open --template <TEMPLATE> --gui
 ```
 That one command does everything: starts the control server if needed, brings up
 a persistent Isaac Sim, waits until READY, and spawns the robot(s). No other call.
@@ -54,11 +56,12 @@ x/y/z to use sensible defaults.
 ## Examples (copy the pattern exactly)
 | User says | You run |
 |---|---|
-| open the warehouse with a Unitree G1 | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1` |
-| open the warehouse with a G1 (preset) | `~/isaac-claw/agents/openclaw/claw open --template warehouse_g1` |
-| open the warehouse | `~/isaac-claw/agents/openclaw/claw open --env warehouse` |
-| put a Spot in the warehouse at the dock | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot spot --anchor dock` |
-| open the warehouse with the fleet | `~/isaac-claw/agents/openclaw/claw open --template warehouse_fleet` |
+| open the warehouse with a Unitree G1 | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1 --gui` |
+| open the warehouse with a G1 (preset) | `~/isaac-claw/agents/openclaw/claw open --template warehouse_g1 --gui` |
+| open the warehouse | `~/isaac-claw/agents/openclaw/claw open --env warehouse --gui` |
+| put a Spot in the warehouse at the dock | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot spot --anchor dock --gui` |
+| open the warehouse with the fleet | `~/isaac-claw/agents/openclaw/claw open --template warehouse_fleet --gui` |
+| open the warehouse headless (for training) | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1` |
 
 ## After it runs
 Report what the command printed: whether the sim came up and the robot spawned

@@ -13,8 +13,11 @@ export ISAAC_CLAW_DIR="${ISAAC_CLAW_DIR:-$(cd "$HERE/../.." && pwd)}"
 export ISAAC_SIM_DIR="${ISAAC_SIM_DIR:-$HOME/IsaacSim}"
 export ISAAC_LAB_DIR="${ISAAC_LAB_DIR:-$HOME/IsaacLab}"
 export ISAAC_LAB_PYTHON="${ISAAC_LAB_PYTHON:-$HOME/miniforge3/envs/env_isaaclab/bin/python}"
+# So `claw open --gui` can open a window: propagate a display to the control
+# server (and the sim it spawns). Override by exporting DISPLAY before running.
+export DISPLAY="${DISPLAY:-:0}"
 
-echo "[claw-tui] ensuring control server ..."
+echo "[claw-tui] ensuring control server ($DISPLAY for GUI) ..."
 "$HERE/claw" up || echo "[claw-tui] WARNING server not confirmed; the TUI can still run 'claw up'"
 
 echo "[claw-tui] launching OpenClaw TUI (model: gemma4:12b)"

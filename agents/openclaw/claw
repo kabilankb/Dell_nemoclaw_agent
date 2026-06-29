@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+"""claw — the single deterministic entrypoint for isaac-claw.
+
+Collapses the multi-step control flow into ONE command so a small local model
+(Gemma/Nemotron) only has to emit a single tool call. Also usable by hand.
+
+    claw up                                  ensure the control server is running
+    claw open --scene warehouse.usd --robot unitree_g1 [--x 6 --y 0 --z 0.74]
+    claw train --task <id> [--backend rsl_rl]
+    claw status | stop | envs | scenes | robots
+
+`claw open` does the whole "open the warehouse with a G1" flow end to end:
+ensure server -> launch a persistent sim (bridge :8226) -> wait until READY ->
+spawn the robot -> print the result. Idempotent and safe to re-run.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+
+BASE = f"http://localhost:{os.environ.get('ISAAC_CONTROL_PORT', '5561')}"
+HERE = os.path.dirname(os.path.abspath(__file__))
+CLAW_DIR = os.environ.get("ISAAC_CLAW_DIR", os.path.dirname(os.path.dirname(HERE)))
+
+
+def _req(method, path, body=None, timeout=10):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(BASE + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.status, json.loads(r.read().decode() or "{}")
+
+
+def server_up():
+    try:
+        _req("GET", "/envs", timeout=3); return True
+    except Exception:
+        return False
+
+
+def ensure_server():
+    if server_up():
+        return True
+    print("[claw] control server down — starting it ...")
+    subprocess.run(["bash", os.path.join(HERE, "clawup.sh")], check=False)
+    for _ in range(30):
+        if server_up():
+            print("[claw] control server up."); return True
+        time.sleep(1)
+    print("[claw] ERROR: control server did not come up", file=sys.stderr)
+    return False
+
+
+def cmd_open(args):
+    scene = _opt(args, "--scene", "warehouse.usd")
+    robot = _opt(args, "--robot", None)
+    x, y, z = float(_opt(args, "--x", 0)), float(_opt(args, "--y", 0)), float(_opt(args, "--z", 0))
+    if not ensure_server():
+        return 1
+
+    st = _req("GET", "/status")[1]
+    if not (st.get("running") and str(st.get("kind", "")).startswith("sim")):
+        print(f"[claw] launching persistent sim on '{scene}' (GPU bring-up ~1-2 min) ...")
+        _req("POST", "/sim/launch", {"scene": scene, "mode": "serve"})
+    else:
+        print(f"[claw] a sim is already running ({st.get('label')}).")
+
+    # wait for the :8226 bridge to be READY
+    print("[claw] waiting for sim READY ", end="", flush=True)
+    ready = False
+    for _ in range(120):                       # up to ~4 min
+        logs = _req("GET", "/logs?lines=8")[1].get("lines", "")
+        if "[serve_sim] READY" in logs or "bridge live on :8226" in logs:
+            ready = True; break
+        print(".", end="", flush=True); time.sleep(2)
+    print(" ready" if ready else " (timeout — trying spawn anyway)")
+
+    if not robot:
+        print("[claw] sim is up. (no --robot given; nothing to spawn)"); return 0
+
+    # spawn, retrying while the bridge finishes coming up
+    for attempt in range(6):
+        code, resp = _req("POST", "/robot/spawn", {"robot": robot, "x": x, "y": y, "z": z})
+        if code == 200 and resp.get("status") != "error":
+            print(f"[claw] spawned {robot} at ({x},{y},{z}):"); print(json.dumps(resp, indent=2)); return 0
+        print(f"[claw] spawn attempt {attempt+1} -> {code} {resp.get('error', resp)}; retrying ...")
+        time.sleep(5)
+    print("[claw] ERROR: could not spawn robot (is it in the catalog? `claw robots`)", file=sys.stderr)
+    return 1
+
+
+def cmd_train(args):
+    if not ensure_server():
+        return 1
+    task = _opt(args, "--task", None)
+    if not task:
+        print("usage: claw train --task <id> [--backend rsl_rl|cusrl|skrl]", file=sys.stderr); return 2
+    body = {"task": task, "backend": _opt(args, "--backend", "rsl_rl"),
+            "num_envs": int(_opt(args, "--num_envs", 4096))}
+    print(json.dumps(_req("POST", "/train", body)[1], indent=2)); return 0
+
+
+def _opt(args, flag, default):
+    return args[args.index(flag) + 1] if flag in args else default
+
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__); return 0
+    cmd, rest = sys.argv[1], sys.argv[2:]
+    if cmd == "up":
+        return 0 if ensure_server() else 1
+    if cmd == "open":
+        return cmd_open(rest)
+    if cmd == "train":
+        return cmd_train(rest)
+    if cmd in ("status", "envs", "scenes", "robots"):
+        if not ensure_server():
+            return 1
+        print(json.dumps(_req("GET", "/" + cmd if cmd != "status" else "/status")[1], indent=2)); return 0
+    if cmd == "stop":
+        if not ensure_server():
+            return 1
+        print(json.dumps(_req("POST", "/stop", {})[1], indent=2)); return 0
+    print(f"unknown command: {cmd}\n{__doc__}", file=sys.stderr); return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

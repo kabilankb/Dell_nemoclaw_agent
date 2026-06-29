@@ -61,13 +61,30 @@ except Exception as e:
 # 3. Open the scene (or start empty if it's missing).
 # ---------------------------------------------------------------------------
 import isaacsim.core.experimental.utils.stage as stage_utils  # noqa: E402
+import omni.usd  # noqa: E402
+
+
+def _wait_for_load(max_frames=2000, settle=60):
+    """Version-robust 'is the stage done streaming' wait (no is_stage_loading)."""
+    ctx = omni.usd.get_context()
+    for _ in range(max_frames):
+        try:
+            status = ctx.get_stage_loading_status()   # (message, files_loaded, total_files)
+            loaded, total = status[1], status[2]
+            if not total or loaded >= total:
+                break
+        except Exception:
+            break
+        simulation_app.update()
+    for _ in range(settle):                            # settle frames regardless
+        simulation_app.update()
+
 
 if os.path.exists(scene_path):
     print(f"[serve_sim] opening {scene_path} ...")
     stage_utils.open_stage(scene_path)
-    while stage_utils.is_stage_loading():
-        simulation_app.update()
-    print(f"[serve_sim] scene loaded")
+    _wait_for_load()
+    print("[serve_sim] scene loaded")
 else:
     print(f"[serve_sim] scene not found ({scene_path}); serving an empty stage")
     for _ in range(10):

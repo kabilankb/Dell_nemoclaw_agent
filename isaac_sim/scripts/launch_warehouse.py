@@ -95,7 +95,16 @@ else:
 # ---------------------------------------------------------------------------
 print(f"[launch] opening {OUT_USD} ...")
 stage_utils.open_stage(OUT_USD)
-while stage_utils.is_stage_loading():
+# version-robust load wait (older builds lack stage_utils.is_stage_loading)
+import omni.usd as _omni_usd  # noqa: E402
+_ctx = _omni_usd.get_context()
+for _ in range(2000):
+    try:
+        _st = _ctx.get_stage_loading_status()
+        if not _st[2] or _st[1] >= _st[2]:
+            break
+    except Exception:
+        break
     simulation_app.update()
 
 # --- Snap the G1's feet exactly to the floor (z=0) via its world bounding box ---

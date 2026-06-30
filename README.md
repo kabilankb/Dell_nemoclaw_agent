@@ -11,6 +11,9 @@ The actual simulators are **referenced, not vendored** — set `$ISAAC_SIM_DIR`
 (`~/IsaacSim`) and `$ISAAC_LAB_DIR` (`~/IsaacLab`). This repo holds only the
 custom extension code, scenes, skills, policies, and agent glue.
 
+> 📁 **[STRUCTURE.md](STRUCTURE.md)** — full annotated layout + runtime-flow diagram.
+> 🕒 **[HISTORY.md](HISTORY.md)** — complete development history (what was built and why).
+
 ## Layout
 ```
 isaac-claw/

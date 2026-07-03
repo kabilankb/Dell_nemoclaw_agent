@@ -100,6 +100,16 @@ cd ../openclaw && bash install-control-service.sh   # control server as an alway
 > ⚠️ Inside the sandbox use plain `openclaw tui` — a named `--session <name>` gets
 > network-isolated and cannot reach the control server on `:5561`.
 
+**Sample prompts** (either TUI — full list in [`agents/nemoclaw/RUNBOOK.md`](agents/nemoclaw/RUNBOOK.md)):
+```
+list robots                                   what can I open?
+open the warehouse with spot                  open hospital with agibot_a2d
+train the Unitree Go2 on rough terrain, headless, 4096 envs
+train the G1 dance task, gui, 2 envs
+how's the training going?                     play the Go2 rough policy
+stop the training                             close the sim
+```
+
 > ⚠️ GPU launches (Isaac Sim, training) must run in a real terminal, not inside a
 > tool-call shell. The control server spawns them as host subprocesses on purpose.
 

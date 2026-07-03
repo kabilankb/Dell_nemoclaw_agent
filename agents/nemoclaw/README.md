@@ -22,7 +22,30 @@ The control server auto-starts if the systemd service is installed, so launching
 nemoclaw <sandbox> connect            # enter the sandbox (e.g. nemoclaw isaacsim connect)
 openclaw tui                          # inside it — PLAIN, no --session
 ```
-Then just talk: "list robots", "open the warehouse with spot", "train the g1 velocity task".
+Then just talk — sample prompts (all tested; more in [`RUNBOOK.md`](RUNBOOK.md)):
+```
+# inventory (read-only)
+list robots
+how many training tasks are available?
+what can I open?
+what's the sim status?
+
+# open a scene — ANY robot in ANY environment
+open the warehouse with spot
+open hospital with agibot_a2d
+open the office with a franka_panda at the entrance
+
+# train (Spot is spawn-only; trainable: Go2/A1/B2/Lite3, the humanoids, …)
+train the Unitree Go2 on rough terrain, headless, 4096 envs
+train the Go2 rough, 500 envs, with entropy_coef 0.015, learning_rate 1e-3
+train the G1 dance task, gui, 2 envs        # AMP dance → skrl + amp (auto)
+
+# monitor / control (one GPU job at a time)
+how's the training going?
+play the Go2 rough policy
+stop the training
+close the sim
+```
 
 > **Rule:** use plain `openclaw tui`. A named `--session <name>` gets
 > network-isolated and cannot reach the host control server on `:5561`.

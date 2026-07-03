@@ -11,8 +11,13 @@ The actual simulators are **referenced, not vendored** — set `$ISAAC_SIM_DIR`
 (`~/IsaacSim`) and `$ISAAC_LAB_DIR` (`~/IsaacLab`). This repo holds only the
 custom extension code, scenes, skills, policies, and agent glue.
 
+![NemoClaw chat driving Isaac Sim: 4,096 humanoids training at once](docs/media/nemoclaw-demo.png)
+*Chat on the left, 4,096 humanoids learning to walk on the right — the
+non-technical tour is in **[docs/DEMO.md](docs/DEMO.md)**.*
+
 > 📁 **[STRUCTURE.md](STRUCTURE.md)** — full annotated layout + runtime-flow diagram.
 > 🕒 **[HISTORY.md](HISTORY.md)** — complete development history (what was built and why).
+> 🎬 **[docs/DEMO.md](docs/DEMO.md)** — plain-English demo overview (show this one to non-engineers).
 
 ## Hardware — Dell Pro Max with GB10
 

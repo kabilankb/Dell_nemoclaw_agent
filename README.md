@@ -105,7 +105,8 @@ cd ../openclaw && bash install-control-service.sh   # control server as an alway
 list robots                                   what can I open?
 open the warehouse with spot                  open hospital with agibot_a2d
 train the Unitree Go2 on rough terrain, headless, 4096 envs
-train the G1 dance task, gui, 2 envs
+train the Unitree G1 on rough terrain, headless, 4096 envs    # humanoids: G1 / H1 / XBot
+train the G1 dance task, gui, 2 envs          # AMP dance → skrl + amp (auto)
 how's the training going?                     play the Go2 rough policy
 stop the training                             close the sim
 ```

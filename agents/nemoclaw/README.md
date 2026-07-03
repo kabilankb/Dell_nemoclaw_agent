@@ -38,7 +38,15 @@ open the office with a franka_panda at the entrance
 # train (Spot is spawn-only; trainable: Go2/A1/B2/Lite3, the humanoids, …)
 train the Unitree Go2 on rough terrain, headless, 4096 envs
 train the Go2 rough, 500 envs, with entropy_coef 0.015, learning_rate 1e-3
-train the G1 dance task, gui, 2 envs        # AMP dance → skrl + amp (auto)
+
+# train a HUMANOID (G1 / H1 / XBot velocity tasks + the special G1 tasks)
+train the Unitree G1 on rough terrain, headless, 4096 envs
+train the Unitree H1 flat, headless, 4096 envs
+train the XBot humanoid rough, headless, 2048 envs
+train the G1 rough, gui, 64 envs            # visible window, few envs so it renders
+train the G1 dance task, gui, 2 envs        # AMP dance → skrl + amp (auto — don't force a backend)
+train the G1 BeyondMimic task, headless
+train the G1 rough, headless, with learning_rate 1e-3, entropy_coef 0.01
 
 # monitor / control (one GPU job at a time)
 how's the training going?

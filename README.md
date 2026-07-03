@@ -14,6 +14,25 @@ custom extension code, scenes, skills, policies, and agent glue.
 > 📁 **[STRUCTURE.md](STRUCTURE.md)** — full annotated layout + runtime-flow diagram.
 > 🕒 **[HISTORY.md](HISTORY.md)** — complete development history (what was built and why).
 
+## Hardware — Dell Pro Max with GB10
+
+Everything here runs on a **single Dell Pro Max with GB10** desktop — the NVIDIA
+**GB10 Grace Blackwell superchip** (same silicon as DGX Spark):
+
+| | |
+|---|---|
+| GPU | Blackwell (GB10), CUDA — shared coherent memory (`nvidia-smi` shows memory `N/A`) |
+| CPU | 20-core Arm (Grace) — **`linux-aarch64`**, so use the aarch64 Isaac Sim build |
+| Memory | 128 GB unified (CPU+GPU coherent) — sim, RL training, and the local LLM share it |
+| SW | NVIDIA driver 580.x, Isaac Sim `_build/linux-aarch64/release`, conda `env_isaaclab` |
+
+One box does the whole loop: **Isaac Sim rendering + Isaac Lab training (4096
+envs) + local model inference** (Nemotron/Gemma via Ollama or vLLM on `:8000`).
+The unified memory is why that fits — but it's also why **only one GPU job runs
+at a time** (the control server enforces this with a 409). On aarch64, check
+Python-wheel availability before adding dependencies — x86-only wheels are the
+most common porting snag.
+
 ## Layout
 ```
 isaac-claw/

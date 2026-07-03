@@ -1,5 +1,14 @@
+# Isaac Control Server egress for a NemoClaw sandbox.
+#
+# Allows the sandbox to reach the host Isaac Control Server (sim / scene / robot /
+# train) at host.openshell.internal:5561. Schema MATCHES the built-in
+# local-inference preset (exact binary paths, no wildcards) — the OPA engine ties
+# the network allowance to specific binaries, so curl/node/python3/openclaw must
+# be listed exactly or requests are denied (policy:- -> 403).
 preset:
   name: isaaclab-training
+  description: "Isaac Control Server access (sim/scene/robot/train) on host:5561"
+
 network_policies:
   isaaclab-training:
     name: isaaclab-training
@@ -8,20 +17,18 @@ network_policies:
         port: 5561
         protocol: rest
         enforcement: enforce
-        rules:
-          - allow:
-              method: GET
-              path: /**
-          - allow:
-              method: POST
-              path: /**
         allowed_ips:
-          - '10.0.0.0/8'
-          - '172.16.0.0/12'
-          - '192.168.0.0/16'
+          # OpenShell's SSRF guard rejects private host-gateway IPs unless the
+          # policy explicitly allowlists the resolved address (172.x here).
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
     binaries:
-      - path: /usr/bin/python3*
-      - path: /usr/local/bin/python3*
-      - path: /usr/local/bin/node*
-      - path: /usr/bin/node*
-      - path: /sandbox/bin/isaaclab-train
+      - { path: /usr/local/bin/openclaw }
+      - { path: /usr/local/bin/node }
+      - { path: /usr/bin/node }
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/python3 }

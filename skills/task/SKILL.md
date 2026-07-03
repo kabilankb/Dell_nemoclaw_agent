@@ -1,6 +1,6 @@
 ---
 name: "isaac-open-environment"
-description: "THE skill for opening a simulation scene and putting a robot in it. Use for ANY request like 'open the warehouse', 'load a scene', 'spawn/add a robot', 'open the warehouse with a Unitree G1', 'bring up the sim'. This is the correct skill for these — do NOT use isaac-sim-orchestrator or mobility-gen for opening a scene or spawning a robot. Trigger keywords: open, open the warehouse, load scene, set up environment, bring up the sim, spawn robot, add robot, put a robot in, show me the robot, unitree, g1, h1, go2, carter."
+description: "THE skill for opening a simulation scene and putting a robot in it. Use for ANY request like 'open the warehouse', 'load a scene', 'spawn/add a robot', 'open the warehouse with a Unitree G1', 'bring up the sim'. This is the correct skill for these — do NOT use isaac-sim-orchestrator or mobility-gen for opening a scene or spawning a robot. Trigger keywords: open, open the warehouse, open the office, open the hospital, open the grid room, load scene, set up environment, bring up the sim, spawn robot, add robot, put a robot in, show me the robot, warehouse, warehouse_full, office, hospital, grid_room, unitree, g1, h1, go2, carter, spot, digit."
 user-invocable: true
 ---
 
@@ -21,24 +21,38 @@ shell/exec tool with the `claw open` command. Example of the ONLY correct behavi
 If you find yourself writing a sentence that starts with "I will" or "Plan" or
 "Based on", STOP — you are doing it wrong. Call the shell tool instead.
 
-## The command (templated — preferred)
+## STANDARD EXECUTION TEMPLATE  (always emit exactly ONE of these shapes)
 ```bash
-~/isaac-claw/agents/openclaw/claw open --env <ENV> --robot <ROBOT> --gui
-```
-**Always include `--gui`** — the user is at a TUI and wants to SEE the simulation
-in a window. (Omit `--gui` only if the user explicitly says "headless" or "for
-training".) The template system fills the rest: the robot's height comes from the
-catalog and the spawn position from the environment — the SAME robot works in any
-environment with no pose math. For a named bundle (env + robot(s) preset):
-```bash
+# A. environment + robot (the normal case)
+~/isaac-claw/agents/openclaw/claw open --env <ENV> [--robot <ROBOT>] [--anchor <ANCHOR>] --gui
+
+# B. a named preset bundle (env + robot(s) already chosen)
 ~/isaac-claw/agents/openclaw/claw open --template <TEMPLATE> --gui
 ```
-That one command does everything: starts the control server if needed, brings up
-a persistent Isaac Sim, waits until READY, and spawns the robot(s). No other call.
+
+**Slots — fill from the user's words, nothing invented:**
+| Slot | Allowed values | Rule |
+|---|---|---|
+| `<ENV>` | `warehouse` · `warehouse_full` · `warehouse_shell` · `warehouse_local` · `office` · `hospital` · `grid_room` | default `warehouse`; if unsure run `claw templates` |
+| `<ROBOT>` | a key from `claw robots` (e.g. `unitree_g1`, `spot`, `nova_carter`, `digit_v4`) | **omit the whole `--robot` flag if the user named no robot** — don't guess one |
+| `<ANCHOR>` | a named spawn point of that env | optional; omit to use the env's default |
+| `<TEMPLATE>` | `warehouse_g1` · `warehouse_fleet` | use only when the user asks for that preset |
+| `--gui` | — | **ALWAYS include**; drop only if the user explicitly says "headless" / "for training" |
+
+**Procedure:** (1) map the sentence → slots, (2) emit the single command, (3) report
+what it printed. One command does everything: starts the control server if needed,
+launches a persistent Isaac Sim, and the robot spawns automatically when the sim is
+READY (~1-2 min; cloud scenes — office/hospital/grid_room — stream and take longer,
+so check `claw status` / `claw logs`). Robot height (catalog) and spawn position
+(env anchor) are filled in for you — no pose math, same robot works in any env.
 
 ## Fill the arguments from the user's words
-**ENV** — match the user's words to an environment (run `claw templates` to list):
-- "warehouse" → `warehouse`  (the default environment)
+**ENV** — match the user's words to ANY of these environments (run
+`~/isaac-claw/agents/openclaw/claw templates` for the live list — never invent one):
+- "warehouse" → `warehouse` (default)   ·   "full warehouse" → `warehouse_full`   ·   "warehouse shell" → `warehouse_shell`
+- "office" → `office`   ·   "hospital" → `hospital`   ·   "empty / grid / ground" → `grid_room`
+- If the user names an environment you don't see here, run `claw templates` and
+  pick the closest key; if there's no match, say so — do not fall back to warehouse silently.
 
 **TEMPLATE** (optional shortcut) — a preset bundle:
 - "warehouse with a G1" → `warehouse_g1`   ·   "warehouse fleet" → `warehouse_fleet`
@@ -54,14 +68,18 @@ Optional **--z** is the standing height for legged robots (G1 ≈ `0.74`). Omit
 x/y/z to use sensible defaults.
 
 ## Examples (copy the pattern exactly)
-| User says | You run |
-|---|---|
-| open the warehouse with a Unitree G1 | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1 --gui` |
-| open the warehouse with a G1 (preset) | `~/isaac-claw/agents/openclaw/claw open --template warehouse_g1 --gui` |
-| open the warehouse | `~/isaac-claw/agents/openclaw/claw open --env warehouse --gui` |
-| put a Spot in the warehouse at the dock | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot spot --anchor dock --gui` |
-| open the warehouse with the fleet | `~/isaac-claw/agents/openclaw/claw open --template warehouse_fleet --gui` |
-| open the warehouse headless (for training) | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1` |
+  | User says | You run |
+  |---|---|
+  | open the warehouse with a Unitree G1 | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1 --gui` |
+  | open the warehouse with a G1 (preset) | `~/isaac-claw/agents/openclaw/claw open --template warehouse_g1 --gui` |
+  | open the warehouse | `~/isaac-claw/agents/openclaw/claw open --env warehouse --gui` |
+  | put a Spot in the warehouse at the dock | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot spot --anchor dock --gui` |
+  | open the warehouse with the fleet | `~/isaac-claw/agents/openclaw/claw open --template warehouse_fleet --gui` |
+  | open the office with a Spot | `~/isaac-claw/agents/openclaw/claw open --env office --robot spot --gui` |
+  | open the hospital with a Carter | `~/isaac-claw/agents/openclaw/claw open --env hospital --robot nova_carter --gui` |
+  | open an empty grid room with a G1 | `~/isaac-claw/agents/openclaw/claw open --env grid_room --robot unitree_g1 --gui` |
+  | open the full warehouse with a Digit | `~/isaac-claw/agents/openclaw/claw open --env warehouse_full --robot digit_v4 --gui` |
+  | open the warehouse headless (for training) | `~/isaac-claw/agents/openclaw/claw open --env warehouse --robot unitree_g1` |
 
 ## After it runs
 Report what the command printed: whether the sim came up and the robot spawned

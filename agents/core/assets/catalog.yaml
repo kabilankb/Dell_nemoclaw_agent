@@ -54,6 +54,34 @@ categories:
       usd: "{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur10e/ur10e.usd"
       drive: fixed-base
       tags: [manipulator, arm, industrial]
+    ur3:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur3/ur3.usd"
+      drive: fixed-base
+      start_z: 0.0
+      tags: [manipulator, arm, industrial, cobot]
+      notes: "compact 6-DOF cobot, ~0.5m reach"
+    ur3e:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur3e/ur3e.usd"
+      drive: fixed-base
+      start_z: 0.0
+      tags: [manipulator, arm, industrial, cobot, e-series]
+    ur5:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5/ur5.usd"
+      drive: fixed-base
+      start_z: 0.0
+      tags: [manipulator, arm, industrial, cobot]
+      notes: "mid-size 6-DOF cobot, ~0.85m reach"
+    ur5e:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur5e/ur5e.usd"
+      drive: fixed-base
+      start_z: 0.0
+      tags: [manipulator, arm, industrial, cobot, e-series]
+    ur16e:
+      usd: "{ISAAC_NUCLEUS_DIR}/Robots/UniversalRobots/ur16e/ur16e.usd"
+      drive: fixed-base
+      start_z: 0.0
+      tags: [manipulator, arm, industrial, cobot, e-series]
+      notes: "high-payload 6-DOF cobot, ~0.9m reach, 16kg"
     kinova_gen3:
       usd: "{ISAAC_NUCLEUS_DIR}/Robots/Kinova/Gen3/gen3n7_instanceable.usd"
       drive: fixed-base
@@ -182,7 +210,7 @@ categories:
 
   environments:
     warehouse_local:
-      usd: "agent_orchestrator/assets/store/environments/warehouse.usd"
+      usd: "agents/core/assets/store/environments/warehouse.usd"
       relative_to: repo
       scale: 1.0
       tags: [warehouse, indoor, repo, stored]

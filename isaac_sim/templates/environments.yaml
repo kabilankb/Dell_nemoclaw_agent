@@ -8,8 +8,14 @@
 #   claw open --env warehouse --robot unitree_g1
 #   claw open --env warehouse --robot spot --anchor dock
 #
-# `scene` is a file in isaac_sim/scenes/ (or an absolute .usd path).
+# `scene` may be:
+#   * a file in isaac_sim/scenes/          (e.g. warehouse.usd)
+#   * an absolute or repo-relative path    (e.g. agents/core/assets/store/.../x.usd)
+#   * a Nucleus token path                 ({ISAAC_NUCLEUS_DIR}/Environments/...)
+#     or an omniverse:// / http(s):// URL  -> streamed from the cloud at launch.
+# serve_sim.py resolves all of these (tokens resolve to the in-sim asset root).
 
+# ---- local (built / repo-owned scenes on disk) ----------------------------
 warehouse:
   scene: warehouse.usd
   default_anchor: pick_station
@@ -19,11 +25,51 @@ warehouse:
     center:       {x: 16.0, y: 0.0}
     dock:         {x: 30.0, y: 0.0}
 
-# --- add more environments here; robot templates need no change ---
-# Example (needs its scene USD present in isaac_sim/scenes/):
-# office:
-#   scene: office.usd
-#   default_anchor: desk
-#   anchors:
-#     desk:  {x: 2.0, y: 1.0}
-#     door:  {x: 0.0, y: 0.0}
+# this repo's authored warehouse, copied into the local asset store
+warehouse_local:
+  scene: agents/core/assets/store/environments/warehouse.usd
+  default_anchor: pick_station
+  anchors:
+    pick_station: {x: 6.0,  y: 0.0}
+    entrance:     {x: 0.5,  y: 0.0}
+    center:       {x: 16.0, y: 0.0}
+    dock:         {x: 30.0, y: 0.0}
+
+# ---- NVIDIA stock scenes (stream from the cloud — no local build needed) ---
+# Anchors are sensible defaults near each scene's origin; tune x/y per scene.
+warehouse_full:
+  scene: "{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/full_warehouse.usd"
+  default_anchor: center
+  anchors:
+    center:   {x: 0.0,  y: 0.0}
+    aisle:    {x: 4.0,  y: 0.0}
+    entrance: {x: -6.0, y: 0.0}
+
+warehouse_shell:
+  scene: "{ISAAC_NUCLEUS_DIR}/Environments/Simple_Warehouse/warehouse.usd"
+  default_anchor: center
+  anchors:
+    center:   {x: 0.0, y: 0.0}
+    aisle:    {x: 4.0, y: 0.0}
+
+grid_room:
+  scene: "{ISAAC_NUCLEUS_DIR}/Environments/Grid/default_environment.usd"
+  default_anchor: origin
+  anchors:
+    origin: {x: 0.0, y: 0.0}
+
+office:
+  scene: "{ISAAC_NUCLEUS_DIR}/Environments/Office/office.usd"
+  default_anchor: center
+  anchors:
+    center: {x: 0.0, y: 0.0}
+    desk:   {x: 2.0, y: 1.0}
+    door:   {x: -3.0, y: 0.0}
+
+hospital:
+  scene: "{ISAAC_NUCLEUS_DIR}/Environments/Hospital/hospital.usd"
+  default_anchor: center
+  anchors:
+    center:   {x: 0.0, y: 0.0}
+    corridor: {x: 5.0, y: 0.0}
+    lobby:    {x: -5.0, y: 0.0}

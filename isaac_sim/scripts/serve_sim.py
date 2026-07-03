@@ -29,7 +29,6 @@ headless = "--gui" not in argv
 scene = os.environ.get("ISAAC_SCENE", "warehouse.usd")
 if "--scene" in argv:
     scene = argv[argv.index("--scene") + 1]
-scene_path = scene if os.path.isabs(scene) else str(SCENES / scene)
 
 # ---------------------------------------------------------------------------
 # 1. Boot Isaac Sim.
@@ -64,6 +63,40 @@ import isaacsim.core.experimental.utils.stage as stage_utils  # noqa: E402
 import omni.usd  # noqa: E402
 
 
+def _resolve_scene(s):
+    """Resolve a scene reference to an openable path/URL. Returns (target, remote).
+
+    Handles three forms so `claw open --env <name>` works for cloud OR local envs:
+      * Nucleus token paths ({ISAAC_NUCLEUS_DIR}/...) and omniverse:// / http(s)://
+        URLs  -> resolve tokens against the in-sim asset root; open as remote.
+      * absolute local path                      -> open as-is.
+      * bare filename or repo-relative path       -> isaac_sim/scenes/<f>, else
+                                                     $ISAAC_CLAW_DIR/<path>.
+    """
+    low = s.lower()
+    if "{" in s or low.startswith(("omniverse://", "http://", "https://")):
+        try:
+            from isaacsim.storage.native import get_assets_root_path
+        except Exception:
+            try:
+                from omni.isaac.nucleus import get_assets_root_path
+            except Exception:
+                get_assets_root_path = lambda: None  # noqa: E731
+        root = get_assets_root_path() or ""
+        s = (s.replace("{ISAACLAB_NUCLEUS_DIR}", root + "/Isaac/IsaacLab")
+              .replace("{ISAAC_NUCLEUS_DIR}", root + "/Isaac")
+              .replace("{NUCLEUS_ASSET_ROOT_DIR}", root))
+        return s, True
+    if os.path.isabs(s):
+        return s, False
+    local = str(SCENES / s)
+    if not os.path.exists(local):
+        alt = str(CLAW_DIR / s)            # repo-relative (e.g. local asset store)
+        if os.path.exists(alt):
+            return alt, False
+    return local, False
+
+
 def _wait_for_load(max_frames=2000, settle=60):
     """Version-robust 'is the stage done streaming' wait (no is_stage_loading)."""
     ctx = omni.usd.get_context()
@@ -80,13 +113,15 @@ def _wait_for_load(max_frames=2000, settle=60):
         simulation_app.update()
 
 
-if os.path.exists(scene_path):
-    print(f"[serve_sim] opening {scene_path} ...")
-    stage_utils.open_stage(scene_path)
+scene_target, scene_remote = _resolve_scene(scene)
+if scene_remote or os.path.exists(scene_target):
+    where = "remote" if scene_remote else "local"
+    print(f"[serve_sim] opening {where} scene {scene_target} ...")
+    stage_utils.open_stage(scene_target)
     _wait_for_load()
     print("[serve_sim] scene loaded")
 else:
-    print(f"[serve_sim] scene not found ({scene_path}); serving an empty stage")
+    print(f"[serve_sim] scene not found ({scene_target}); serving an empty stage")
     for _ in range(10):
         simulation_app.update()
 

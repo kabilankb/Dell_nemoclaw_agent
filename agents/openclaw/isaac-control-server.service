@@ -1,0 +1,22 @@
+[Unit]
+# Isaac Claw Control Server — the host GPU bridge that NemoClaw/OpenClaw drive
+# over :5561 (spawns Isaac Sim, runs train/play/eval). MUST run on the host (GPU +
+# env_isaaclab + Isaac Sim install), so it lives here as a persistent user service
+# instead of a manual terminal. Install: agents/openclaw/install-control-service.sh
+Description=Isaac Claw Control Server (host GPU bridge for NemoClaw/OpenClaw)
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=ISAAC_CLAW_DIR=/home/dgx-destro/isaac-claw
+Environment=ISAAC_LAB_PYTHON=/home/dgx-destro/miniforge3/envs/env_isaaclab/bin/python
+Environment=ISAAC_CONTROL_PORT=5561
+Environment=DISPLAY=:1
+ExecStart=/home/dgx-destro/miniforge3/envs/env_isaaclab/bin/python /home/dgx-destro/isaac-claw/isaac_sim/scripts/isaac_control_server.py
+Restart=on-failure
+RestartSec=3
+# Give in-flight GPU jobs a moment; the server owns sim/training lifecycle.
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target

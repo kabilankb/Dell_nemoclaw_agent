@@ -9,9 +9,11 @@ Collapses the whole control flow into ONE command so a small local model
     claw open --env warehouse --robot unitree_g1 [--anchor pick_station] [--gui]
         --gui  open a VISIBLE Isaac Sim window (needs a display); default headless
     claw open --scene warehouse.usd --robot unitree_g1 [--x 6 --y 0 --z 0.74]
-    claw train --task <id> [--backend rsl_rl]
+    claw train --task <id> [--backend rsl_rl] [--gui] [--num_envs N]
+        --gui  train in a VISIBLE window (few envs, watchable); default = headless (fast, 4096)
     claw close                               stop the sim/training, free the GPU
-    claw templates | scenes | robots | envs | status
+    claw restart                             restart the control server (load new code/config)
+    claw templates | scenes | robots | envs | tasks | status | logs
 
 TEMPLATES decouple robot from environment:
   * robot height/drive come from the asset catalog (per-robot),
@@ -31,11 +33,35 @@ import urllib.request
 
 import yaml  # available in both system python3 and env_isaaclab
 
-BASE = f"http://localhost:{os.environ.get('ISAAC_CONTROL_PORT', '5561')}"
+PORT = os.environ.get('ISAAC_CONTROL_PORT', '5561')
 HERE = os.path.dirname(os.path.abspath(__file__))
 CLAW_DIR = os.environ.get("ISAAC_CLAW_DIR", os.path.dirname(os.path.dirname(HERE)))
 TPL_DIR = os.path.join(CLAW_DIR, "isaac_sim", "templates")
 CATALOG = os.path.join(CLAW_DIR, "agents", "core", "assets", "catalog.yaml")
+
+_BASE = None
+
+
+def base():
+    """Control-server URL. Works for BOTH runtimes with no config:
+    OpenClaw runs on the host (localhost); NemoClaw runs in a sandbox that reaches
+    the host at host.openshell.internal. Explicit ISAAC_CONTROL_HOST wins; else we
+    probe localhost first, then the sandbox->host gateway. Resolved once, lazily,
+    so offline commands (e.g. `claw tasks`) never pay for it."""
+    global _BASE
+    if _BASE:
+        return _BASE
+    host = os.environ.get("ISAAC_CONTROL_HOST")
+    if host:
+        _BASE = f"http://{host}:{PORT}"; return _BASE
+    for h in ("localhost", "host.openshell.internal"):
+        try:
+            socket.create_connection((h, int(PORT)), timeout=1).close()
+            _BASE = f"http://{h}:{PORT}"; return _BASE
+        except OSError:
+            continue
+    _BASE = f"http://localhost:{PORT}"            # default; a clear error will surface
+    return _BASE
 
 
 # --------------------------------------------------------------------------- #
@@ -43,7 +69,7 @@ CATALOG = os.path.join(CLAW_DIR, "agents", "core", "assets", "catalog.yaml")
 # --------------------------------------------------------------------------- #
 def _req(method, path, body=None, timeout=10):
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(BASE + path, data=data, method=method,
+    req = urllib.request.Request(base() + path, data=data, method=method,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -169,39 +195,15 @@ def _kill_stray_sim():
     time.sleep(3)
 
 
-def cmd_open(args):
-    scene, robots = resolve_spec(args)
-    if not ensure_server():
-        return 1
-
-    gui = "--gui" in args
-    st = _req("GET", "/status")[1]
-    running = bool(st.get("running") and str(st.get("kind", "")).startswith("sim"))
-    # A windowed request always (re)launches; otherwise reuse a running sim.
-    if running and not gui:
-        print(f"[claw] a sim is already running ({st.get('label')}).")
-    else:
-        if running or _bridge_open():
-            print("[claw] stopping the current/orphaned sim to (re)launch ...")
-            _req("POST", "/stop", {})       # stop a tracked job (control server SIGTERMs Kit safely)
-            _kill_stray_sim()               # and any untracked orphan holding :8226
-        win = "windowed GUI" if gui else "headless"
-        print(f"[claw] launching persistent sim ({win}) on '{scene}' (GPU bring-up ~1-2 min) ...")
-        _req("POST", "/sim/launch", {"scene": scene, "mode": "serve", "gui": gui})
-
-    # Probe the actual :8226 bridge (a real readiness check, not log-scraping).
-    print("[claw] waiting for sim READY ", end="", flush=True)
-    ready = False
-    for _ in range(150):
-        code, resp = _req("POST", "/exec", {"code": "print('pong')"}, timeout=15)
-        if code == 200 and resp.get("status") != "error":
-            ready = True; break
-        print(".", end="", flush=True); time.sleep(2)
-    print(" ready" if ready else " (timeout — trying spawn anyway)")
-
+def _spawn_now(robots):
+    """Spawn into an ALREADY-running sim (bridge up) and report synchronously."""
     if not robots:
         print("[claw] sim is up. (no robots in this spec)"); return 0
-
+    for _ in range(30):                      # quick readiness probe (sim already up)
+        code, resp = _req("POST", "/exec", {"code": "print('pong')"}, timeout=15)
+        if code == 200 and resp.get("status") != "error":
+            break
+        time.sleep(2)
     rc = 0
     for spec in robots:
         ok = False
@@ -214,10 +216,47 @@ def cmd_open(args):
                   f"{resp.get('error', resp)}; retrying ...")
             time.sleep(5)
         if not ok:
-            print(f"[claw] ERROR: could not spawn {spec['robot']} "
-                  f"(in catalog? `claw robots`)", file=sys.stderr)
+            print(f"[claw] ERROR: could not spawn {spec['robot']} (in catalog? `claw robots`)",
+                  file=sys.stderr)
             rc = 1
     return rc
+
+
+def cmd_open(args):
+    scene, robots = resolve_spec(args)
+    if not ensure_server():
+        return 1
+
+    gui = "--gui" in args
+    st = _req("GET", "/status")[1]
+    running = bool(st.get("running") and str(st.get("kind", "")).startswith("sim"))
+    running_scene = (st.get("label") or "").rsplit(":", 1)[0]
+    # Reuse a running sim ONLY if it's the same scene and no window was requested;
+    # then spawn into it synchronously (the bridge is already up, so it's fast).
+    if running and not gui and running_scene == scene:
+        print(f"[claw] reusing running sim ({st.get('label')}); spawning into it.")
+        return _spawn_now(robots)
+
+    # Otherwise (re)launch. Hand the robot list to the control server so it spawns
+    # them server-side once the sim is READY, and RETURN NOW — a slow GPU/cloud
+    # bring-up must not block the caller (a local model's command timeout kills it).
+    if running or _bridge_open():
+        print("[claw] stopping the current/orphaned sim to (re)launch ...")
+        _req("POST", "/stop", {})
+        _kill_stray_sim()
+    win = "windowed GUI" if gui else "headless"
+    body = {"scene": scene, "mode": "serve", "gui": gui}
+    if robots:
+        body["spawn"] = robots
+    print(f"[claw] launching persistent sim ({win}) on '{scene}' ...")
+    _req("POST", "/sim/launch", body, timeout=30)
+    if robots:
+        names = ", ".join(r["robot"] for r in robots)
+        print(f"[claw] sim is starting; {names} will spawn automatically when it's READY "
+              f"(~1-2 min; cloud scenes longer). Track it with `claw status` and `claw logs`.")
+    else:
+        print("[claw] sim is starting (no robots in this spec). Track with `claw status`.")
+    return 0
 
 
 def cmd_templates(_args):
@@ -254,15 +293,37 @@ def cmd_close(_args):
     return 0
 
 
+def cmd_restart(_args):
+    """Restart the control server so it picks up new code/config. Runs in the
+    USER's process tree (clawup/tui), so it may kill+relaunch the host server."""
+    print("[claw] restarting control server (freeing GPU first) ...")
+    cmd_close([])                                  # stop any sim/training
+    subprocess.run(["pkill", "-f", "isaac_control_server.py"], check=False)
+    time.sleep(2)
+    if ensure_server():                            # clawup.sh starts a fresh one
+        print("[claw] control server restarted (new code loaded)."); return 0
+    print("[claw] ERROR: control server did not come back up", file=sys.stderr); return 1
+
+
 def cmd_train(args):
     if not ensure_server():
         return 1
     task = _opt(args, "--task", None)
     if not task:
-        print("usage: claw train --task <id> [--backend rsl_rl|cusrl|skrl]", file=sys.stderr); return 2
-    body = {"task": task, "backend": _opt(args, "--backend", "rsl_rl"),
-            "num_envs": int(_opt(args, "--num_envs", 4096))}
-    print(json.dumps(_req("POST", "/train", body)[1], indent=2)); return 0
+        print("usage: claw train --task <id> [--backend rsl_rl|cusrl|skrl] "
+              "[--gui] [--num_envs N] [--algorithm amp]", file=sys.stderr); return 2
+    gui = "--gui" in args                          # visible window vs headless (default)
+    default_envs = 64 if gui else 4096             # GUI -> small so it's watchable
+    body = {"task": task, "backend": _opt(args, "--backend", "rsl_rl"), "gui": gui,
+            "num_envs": int(_opt(args, "--num_envs", default_envs))}
+    algo = _opt(args, "--algorithm", None)         # e.g. amp for the AMP dance task
+    if algo:
+        body["algorithm"] = algo.upper()           # skrl choices are AMP/PPO/IPPO/MAPPO (uppercase)
+    print(json.dumps(_req("POST", "/train", body)[1], indent=2))
+    if gui:
+        print(f"[claw] training in a VISIBLE window with {body['num_envs']} envs "
+              f"(needs a display). Drop --gui for fast headless training (4096 envs).")
+    return 0
 
 
 def _opt(args, flag, default):
@@ -286,10 +347,20 @@ def main():
             return 1
         path = "/status" if cmd == "status" else "/" + cmd
         print(json.dumps(_req("GET", path)[1], indent=2)); return 0
+    if cmd == "logs":
+        if not ensure_server():
+            return 1
+        n = _opt(rest, "--lines", "40")
+        print(_req("GET", f"/logs?lines={n}")[1].get("lines", "")); return 0
+    if cmd == "tasks":                       # offline, formatted, launch-ready task list
+        script = os.path.join(CLAW_DIR, "isaac_lab", "scripts", "list_tasks.py")
+        return subprocess.call([sys.executable, script, *rest])
     if cmd == "envs-tpl":
         return cmd_templates(rest)
     if cmd in ("close", "stop", "shutdown"):
         return cmd_close(rest)
+    if cmd in ("restart", "reload"):
+        return cmd_restart(rest)
     print(f"unknown command: {cmd}\n{__doc__}", file=sys.stderr); return 2
 
 

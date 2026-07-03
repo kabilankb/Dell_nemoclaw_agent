@@ -1,0 +1,27 @@
+# Allow the NemoClaw sandbox to reach the host vLLM OpenAI endpoint (port 8000).
+# Schema matches the built-in local-inference preset (exact binary paths) so the
+# OPA engine actually allows it.
+preset:
+  name: vllm-inference
+  description: "Local vLLM OpenAI endpoint (tool-calling) on host:8000"
+network_policies:
+  vllm-inference:
+    name: vllm-inference
+    endpoints:
+      - host: host.openshell.internal
+        port: 8000
+        protocol: rest
+        enforcement: enforce
+        allowed_ips:
+          - 10.0.0.0/8
+          - 172.16.0.0/12
+          - 192.168.0.0/16
+        rules:
+          - allow: { method: GET, path: "/**" }
+          - allow: { method: POST, path: "/**" }
+    binaries:
+      - { path: /usr/local/bin/openclaw }
+      - { path: /usr/local/bin/node }
+      - { path: /usr/bin/node }
+      - { path: /usr/bin/curl }
+      - { path: /usr/bin/python3 }

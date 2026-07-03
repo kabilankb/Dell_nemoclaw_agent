@@ -25,6 +25,15 @@ curl -sf http://localhost:5561/envs >/dev/null && echo UP || echo DOWN
 curl -s http://localhost:5561/status        # current GPU job (sim or training)
 ```
 
+## 2b. RESTART the control server (after code/config changes)
+If the user says "restart the control server / reload it / it's running old code",
+or after editing server code, run:
+```bash
+~/isaac-claw/agents/openclaw/claw restart
+```
+This frees the GPU, kills the old server, and brings a fresh one up (loading new
+code). Needed e.g. before GUI training or after a `claw` update.
+
 ## 3. Bring up a LIVE sim (needed for scene-load / robot-spawn)
 A persistent Isaac Sim with the python_server bridge (:8226) must be running for
 `/scene/load`, `/robot/spawn`, `/exec`. One command does both (server + sim):

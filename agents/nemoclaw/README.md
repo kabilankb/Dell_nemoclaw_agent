@@ -33,8 +33,15 @@ blocked.
 
 ## Deploy the isaac-claw skills into the sandbox
 ```bash
-./install_skill.sh <sandbox>          # installs skill/ into the sandbox's OpenClaw
+./install_skill.sh <sandbox>          # installs the OPERATIONAL set into the sandbox
 ```
-Then the model loads [`../../skills/skills.md`](../../skills/skills.md) and drives
-the simulator through the control server exactly like OpenClaw does — same skills,
-same endpoints, different model.
+This now mirrors OpenClaw's `deploy.sh`: it installs the same small operational set
+(`task`, `inventory`, `ops`, `close`, `training`, `teleop`, `mimicgen`) from the
+shared [`../../skills/`](../../skills) library — NOT the old `isaac-agent-orchestrator`.
+NemoClaw drives the simulator through the same `claw` CLI and control server as
+OpenClaw — same skills, same endpoints, different model.
+
+**Host resolution is automatic.** `claw` probes `localhost` then
+`host.openshell.internal`, so inside the sandbox it reaches the host control server
+with no config (override with `ISAAC_CONTROL_HOST=host.openshell.internal`). The repo
+must be reachable in the sandbox at `~/isaac-claw` so the skills' `claw` path resolves.

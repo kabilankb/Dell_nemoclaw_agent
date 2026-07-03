@@ -16,13 +16,24 @@ and OpenClaw differ in config, not code.
 | `skill/` | The SKILL.md package installed into the sandbox's OpenClaw so the model discovers isaac-claw. |
 | `install_skill.sh` | `nemoclaw <sandbox> skill install` wrapper. |
 
-## Setup
+## Daily use — 2 commands
+The control server auto-starts if the systemd service is installed, so launching is just:
 ```bash
-nemoclaw onboard                      # wizard: pick the 'default' (Nemotron) profile, create a sandbox
-nemoclaw <sandbox> connect            # enter the sandbox
-# inside the sandbox:
-openclaw tui                          # chat with the Nemotron-backed agent
+nemoclaw <sandbox> connect            # enter the sandbox (e.g. nemoclaw isaacsim connect)
+openclaw tui                          # inside it — PLAIN, no --session
 ```
+Then just talk: "list robots", "open the warehouse with spot", "train the g1 velocity task".
+
+> **Rule:** use plain `openclaw tui`. A named `--session <name>` gets
+> network-isolated and cannot reach the host control server on `:5561`.
+
+## One-time setup (redo only if the sandbox is rebuilt)
+```bash
+nemoclaw onboard                      # wizard: pick a tool-capable model (nemotron-3-super:120b)
+./install_skill.sh <sandbox>          # skills + :5561 egress policy + dedicated isaac__* MCP tools
+cd ../openclaw && bash install-control-service.sh   # control server as an always-on systemd service
+```
+Full walkthrough, examples, and troubleshooting: [`RUNBOOK.md`](RUNBOOK.md).
 
 ## Network policy (required for Goal 1)
 The sandbox reaches the host **Isaac Control Server** on port 5561 only because a

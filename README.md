@@ -83,9 +83,22 @@ $ISAAC_LAB_PYTHON isaac_sim/scripts/isaac_control_server.py
 
 # 2a. drive it with OpenClaw (Gemma)        — see agents/openclaw/README.md
 openclaw tui
-# 2b. or NemoClaw (Nemotron, sandboxed)     — see agents/nemoclaw/README.md
-nemoclaw <sandbox> connect && openclaw tui
+# 2b. or NemoClaw (Nemotron, sandboxed)     — see agents/nemoclaw/README.md + RUNBOOK.md
+nemoclaw isaacsim connect                 # enter the sandbox (yours may be named differently)
+openclaw tui                              # inside it — plain, NO --session
 ```
+
+**NemoClaw one-time setup** (only after a sandbox rebuild — details in
+[`agents/nemoclaw/RUNBOOK.md`](agents/nemoclaw/RUNBOOK.md)):
+```bash
+cd agents/nemoclaw
+nemoclaw onboard                          # create sandbox: pick a tool-capable model (nemotron-3-super:120b)
+./install_skill.sh isaacsim               # skills + :5561 egress policy + dedicated isaac__* MCP tools
+cd ../openclaw && bash install-control-service.sh   # control server as an always-on systemd service
+```
+
+> ⚠️ Inside the sandbox use plain `openclaw tui` — a named `--session <name>` gets
+> network-isolated and cannot reach the control server on `:5561`.
 
 > ⚠️ GPU launches (Isaac Sim, training) must run in a real terminal, not inside a
 > tool-call shell. The control server spawns them as host subprocesses on purpose.

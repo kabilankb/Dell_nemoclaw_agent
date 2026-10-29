@@ -60,7 +60,7 @@ These are the EXACT keys for `claw open --robot <key>`. No others exist.
 - `warehouse_g1` — env `warehouse`, robots: [unitree_g1]
 
 ## Scene USDs actually on disk
-`warehouse.usd`
+_(none built — regenerate with isaac_sim/scripts/build_warehouse.py)_
 
 ## Trainable robots (27) — NOT spawnable
 These robots appear in RL TASK ids (train them with `claw train`). They are a

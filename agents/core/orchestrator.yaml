@@ -81,7 +81,7 @@ backends:
     # Local Ollama model OpenClaw runs each layer on (passed as `--model`). Must be
     # declared in ~/.openclaw/openclaw.json models.providers.ollama.models AND pulled
     # (`ollama pull gemma4:12b`). null = OpenClaw's configured default (ollama/gemma3:12b).
-    model: ollama/gemma4:12b
+    model: nebius/nvidia/nemotron-3-super-120b-a12b   # Nemotron on Nebius Token Factory (was ollama/gemma4:12b)
     timeout: 900            # local models are slower than the cloud — give them headroom
 
   nemoclaw:

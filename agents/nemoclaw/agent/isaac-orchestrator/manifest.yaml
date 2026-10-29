@@ -103,6 +103,7 @@ inference:
 phone_home_hosts:
   - api.anthropic.com
   - integrate.api.nvidia.com
+  - api.tokenfactory.nebius.com
   - omniverse-content-production.s3.us-west-2.amazonaws.com
 
 # ── Package registry ───────────────────────────────────────────

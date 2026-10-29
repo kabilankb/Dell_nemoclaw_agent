@@ -12,6 +12,12 @@ full Isaac control API:
     GET  /robots          list robots resolvable from the asset catalog
     GET  /status          current job (sim OR train/play/eval) status
     GET  /logs?lines=N    tail the active job log
+    GET  /training        structured metrics of the active (or last) run's log
+                          (?log=<name> for an older run; reward curve, fall rate…)
+    GET  /runs            past train/play logs, newest first (for replay)
+    GET  /events?since=N  recent POSTs (tool calls) as they happen, for live UIs
+    GET  /video/latest    newest play recording (mp4) from POST /record
+    GET  /checkpoints?task=  trained runs of an Isaac Lab 3 task, most-trained first
 
     POST /sim/launch      {scene?}            launch Isaac Sim headless on a scene
     POST /scene/load      {scene}             load a USD into the RUNNING sim (port 8226)
@@ -20,6 +26,7 @@ full Isaac control API:
     POST /train           {task, backend, num_envs?, max_iterations?, seed?}
     POST /play            {task, backend?, checkpoint?, num_envs?}
     POST /eval            {task, backend?, checkpoint?, num_envs?}
+    POST /record          {task, checkpoint?, steps?}  headless play that records an mp4
     POST /stop            {}                  stop the active GPU job
 
 Design rules carried over from the originals:
@@ -35,6 +42,7 @@ This file is dependency-free (Python stdlib only) so it runs under any python.
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -54,10 +62,15 @@ LAB_DIR = CLAW_DIR / "isaac_lab"
 SIM_DIR = CLAW_DIR / "isaac_sim"
 
 # The python that has Isaac Lab installed (conda env or IsaacSim's python.sh).
-LAB_PYTHON = os.environ.get(
-    "ISAAC_LAB_PYTHON",
-    os.path.expanduser("~/miniforge3/envs/env_isaaclab/bin/python"),
-)
+def _default_lab_python():
+    for base in ("~/miniforge3", "~/miniconda3"):
+        p = os.path.expanduser(f"{base}/envs/env_isaaclab/bin/python")
+        if os.path.exists(p):
+            return p
+    return os.path.expanduser("~/miniforge3/envs/env_isaaclab/bin/python")
+
+
+LAB_PYTHON = os.environ.get("ISAAC_LAB_PYTHON") or _default_lab_python()
 # Isaac Sim install root (referenced, not vendored — see repo README).
 ISAAC_SIM_INSTALL = Path(os.environ.get("ISAAC_SIM_DIR", os.path.expanduser("~/IsaacSim")))
 
@@ -72,9 +85,20 @@ TPL_DIR = SIM_DIR / "templates"
 PY_SERVER_HOST = os.environ.get("ISAAC_PY_SERVER_HOST", "127.0.0.1")
 PY_SERVER_PORT = int(os.environ.get("ISAAC_PY_SERVER_PORT", "8226"))
 
+# Isaac Lab 3 checkout (uv) for tasks registered with "launcher": "isaaclab3"
+# (e.g. the MicroDuck contrib tasks). Launched via its `isaaclab` CLI.
+LAB3_DIR = Path(os.environ.get("ISAAC_LAB3_DIR", os.path.expanduser("~/IsaacLab-develop")))
+LAB3_PYTHON = LAB3_DIR / ".venv" / "bin" / "python"
+LAB3_LAUNCH = LAB_DIR / "scripts" / "isaaclab3_launch.py"
+# Viewer for gui=true runs: "viser" (web, shown in web/console) or "newton_gl" (desktop window).
+LAB3_VIZ = os.environ.get("ISAAC_LAB3_VIZ", "viser")
+VISER_PORT = int(os.environ.get("ISAAC_VISER_PORT", "8012"))
+
 # Optional LD_PRELOAD fix carried from robot_lab (libgomp on aarch64). Set "" to skip.
 LD_PRELOAD = os.environ.get("ISAAC_LD_PRELOAD",
                             "/lib/aarch64-linux-gnu/libgomp.so.1")
+if LD_PRELOAD and not os.path.exists(LD_PRELOAD):   # e.g. x86_64 hosts
+    LD_PRELOAD = ""
 
 HOST = os.environ.get("ISAAC_CONTROL_HOST", "0.0.0.0")
 PORT = int(os.environ.get("ISAAC_CONTROL_PORT", "5561"))  # same port the clients already use
@@ -165,8 +189,53 @@ def list_robots():
     return sorted(set(names))
 
 
-ENVIRONMENTS = load_envs()
+def _python_has(python, module):
+    try:
+        return subprocess.run(
+            [python, "-c", f"import importlib.util,sys; sys.exit(importlib.util.find_spec('{module}') is None)"],
+            capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def mark_availability(envs):
+    """Tag each task with whether THIS host can run it, so the model is never offered
+    a task that dies at launch (robot_lab tasks need ISAAC_LAB_PYTHON with robot_lab
+    installed; isaaclab3 tasks need the Isaac Lab 3 venv)."""
+    lab3_ok = LAB3_PYTHON.exists()
+    lab_ok = os.path.exists(LAB_PYTHON)
+    pkgs = {}
+    for e in envs:
+        if e.get("launcher") == "isaaclab3":
+            ok, why = lab3_ok, f"Isaac Lab 3 venv missing: {LAB3_PYTHON}"
+        else:
+            pkg = "leisaac" if e.get("source") == "leisaac" else "robot_lab"
+            if pkg not in pkgs:
+                pkgs[pkg] = lab_ok and _python_has(LAB_PYTHON, pkg)
+            ok = pkgs[pkg]
+            why = (f"'{pkg}' is not installed in {LAB_PYTHON}" if lab_ok
+                   else f"ISAAC_LAB_PYTHON not found: {LAB_PYTHON}")
+        e["available"] = ok
+        if not ok:
+            e["unavailable_reason"] = why
+    return envs
+
+
+ENVIRONMENTS = mark_availability(load_envs())
 VALID_IDS = {e["id"] for e in ENVIRONMENTS}
+ENV_BY_ID = {e["id"]: e for e in ENVIRONMENTS}
+
+# Recent POSTs, so a UI can show "calling isaac__train_task…" while an agent turn runs.
+EVENTS = []
+_event_seq = [0]
+
+
+def record_event(path, body):
+    _event_seq[0] += 1
+    keep = {k: body[k] for k in ("task", "env", "robot", "gui", "num_envs", "max_iterations",
+                                 "params", "checkpoint") if k in body}
+    EVENTS.append({"seq": _event_seq[0], "t": time.time(), "path": path, "args": keep})
+    del EVENTS[:-200]
 
 # --------------------------------------------------------------------------- #
 # Single-job state machine (one GPU job at a time)
@@ -195,6 +264,10 @@ def tail_log(n=40):
         return "".join(f.readlines()[-n:])
 
 
+class LaunchError(RuntimeError):
+    pass
+
+
 def start_job(kind, label, cmd, cwd):
     log_file = LOG_DIR / f"{kind}_{label}_{int(time.time())}.log".replace("/", "_")
     env = os.environ.copy()
@@ -202,12 +275,123 @@ def start_job(kind, label, cmd, cwd):
         env["LD_PRELOAD"] = LD_PRELOAD
     env.setdefault("ISAAC_CLAW_DIR", str(CLAW_DIR))
     with open(log_file, "w") as lf:
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=lf,
-                                stderr=subprocess.STDOUT)
+        try:
+            proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=lf,
+                                    stderr=subprocess.STDOUT)
+        except OSError as e:   # e.g. a python path that doesn't exist on this host
+            lf.write(f"failed to launch {cmd[0]}: {e}\n")
+            raise LaunchError(f"could not launch {cmd[0]}: {e.strerror or e}") from e
     job.update(process=proc, pid=proc.pid, kind=kind, label=label,
                start_time=time.time(), log_file=str(log_file))
     return {"status": "started", "kind": kind, "label": label,
             "pid": proc.pid, "log_file": str(log_file)}
+
+
+# --------------------------------------------------------------------------- #
+# Training-log parsing (rsl_rl console output) for GET /training
+# --------------------------------------------------------------------------- #
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+_ITER = re.compile(r"Learning iteration (\d+)/(\d+)")
+_REWARD = re.compile(r"^\s*Mean reward:\s*(-?[\d.]+)", re.M)
+_EPLEN = re.compile(r"^\s*Mean episode length:\s*(-?[\d.]+)", re.M)
+_TERM = re.compile(r"Episode_Termination/(\w+):\s*(-?[\d.]+)")
+_RTERM = re.compile(r"Episode_Reward/(\w+):\s*(-?[\d.]+)")
+_ETA = re.compile(r"ETA:\s*([\d:]+)")
+_ITER_TIME = re.compile(r"Iteration time:\s*([\d.]+)s")
+_STD = re.compile(r"Mean action std:\s*([\d.]+)")
+# Terminations that mean "the robot fell" (anything but running out of time).
+_FALL_TERMS = ("fell_over", "base_contact", "illegal_contact", "bad_orientation", "base_height")
+
+
+def list_runs():
+    logs = sorted(LOG_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+    # skip stubs from launches that died before writing anything useful
+    return [p for p in logs if p.name.startswith(("train_", "play_", "record_"))
+            and p.stat().st_size > 2000]
+
+
+def parse_training_log(path):
+    text = _ANSI.sub("", Path(path).read_text(errors="replace"))
+    iters = _ITER.findall(text)
+    rewards = [float(x) for x in _REWARD.findall(text)]
+    terms = dict(_TERM.findall(text))       # last value of each term wins
+    reward_terms = dict(_RTERM.findall(text))
+    fell = sum(float(terms[k]) for k in _FALL_TERMS if k in terms) if terms else None
+    pick = lambda rx: (rx.findall(text) or [None])[-1]
+    out = {
+        "log_file": Path(path).name,
+        # log names are <kind>_<task>_<unix time>.log (see start_job)
+        "kind": Path(path).name.split("_", 1)[0],
+        "task": Path(path).stem.split("_", 1)[-1].rsplit("_", 1)[0],
+        "iteration": int(iters[-1][0]) if iters else None,
+        "max_iterations": int(iters[-1][1]) if iters else None,
+        "mean_reward": rewards[-1] if rewards else None,
+        "reward_history": rewards[-400:],
+        "mean_episode_length": float(pick(_EPLEN)) if pick(_EPLEN) else None,
+        "fell_over": round(fell, 4) if fell is not None else None,
+        "terminations": {k: float(v) for k, v in terms.items()},
+        "reward_terms": {k: float(v) for k, v in reward_terms.items()},
+        "action_std": float(pick(_STD)) if pick(_STD) else None,
+        "eta": pick(_ETA),
+        "iteration_time_s": float(pick(_ITER_TIME)) if pick(_ITER_TIME) else None,
+        "finished": "Training time:" in text,
+    }
+    # Viewer clients dropping their websocket log harmless tracebacks; only surface
+    # the others (a real crash ends the log with one).
+    blocks = [b for b in text.split("Traceback (most recent call last):")[1:]
+              if "/websockets/" not in b]
+    if blocks:
+        out["error"] = ("Traceback (most recent call last):" + blocks[-1])[-1500:]
+    elif text.startswith("failed to launch"):
+        out["error"] = text.strip()[:500]
+    return out
+
+
+def lab3_checkpoints(task):
+    """Isaac Lab 3 runs of `task` (matched via each run's run.json), most-trained first.
+    `--checkpoint latest` would pick the NEWEST run, which is often a stub from an
+    aborted run holding only model_0.pt — an untrained policy."""
+    runs = []
+    for rj in (LAB3_DIR / "logs").glob("*/*/*/run.json"):
+        try:
+            if json.loads(rj.read_text()).get("task") != task:
+                continue
+        except (OSError, json.JSONDecodeError):
+            continue
+        models = [(int(m.stem.split("_")[1]), m) for m in rj.parent.glob("model_*.pt")
+                  if m.stem.split("_")[1].isdigit()]
+        if models:
+            it, path = max(models)
+            runs.append({"run": rj.parent.name, "iteration": it, "checkpoint": str(path),
+                         "mtime": path.stat().st_mtime})
+    return sorted(runs, key=lambda r: (r["iteration"], r["mtime"]), reverse=True)
+
+
+def resolve_checkpoint(task, requested):
+    """'best' (default) -> most-trained run's last model; anything else passes through."""
+    if requested and requested != "best":
+        return requested
+    runs = lab3_checkpoints(task)
+    return runs[0]["checkpoint"] if runs else "latest"
+
+
+def known_reward_terms(task):
+    """Reward term names this task has logged before (Episode_Reward/<term>), or None if
+    it never ran here. Used to drop reward_<term> knobs that would crash the launch."""
+    for lf in sorted(LOG_DIR.glob(f"train_{task}_*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+        terms = set(_RTERM_NAME.findall(lf.read_text(errors="replace")))
+        if terms:
+            return terms
+    return None
+
+
+_RTERM_NAME = re.compile(r"Episode_Reward/(\w+):")
+
+
+def latest_video():
+    roots = [LAB3_DIR / "logs", LAB_DIR / "logs"]
+    vids = [p for r in roots if r.exists() for p in r.rglob("*.mp4")]
+    return max(vids, key=lambda p: p.stat().st_mtime) if vids else None
 
 
 # --------------------------------------------------------------------------- #
@@ -427,8 +611,46 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- GET ----
     def do_GET(self):
+        path, _, qs = self.path.partition("?")
+        q = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
         if self.path == "/envs":
-            self._respond(200, {"environments": ENVIRONMENTS, "count": len(ENVIRONMENTS)})
+            avail = sum(1 for e in ENVIRONMENTS if e.get("available"))
+            self._respond(200, {"environments": ENVIRONMENTS, "count": len(ENVIRONMENTS),
+                                "available": avail})
+        elif path == "/training":
+            name = q.get("log")
+            lf = (LOG_DIR / Path(name).name) if name else (
+                Path(job["log_file"]) if job.get("log_file") else (list_runs() or [None])[0])
+            if not lf or not Path(lf).exists():
+                return self._respond(200, {"running": False, "metrics": None})
+            m = parse_training_log(lf)
+            running = job_running() and str(lf) == job.get("log_file")
+            out = {"running": running, "kind": job["kind"] if running else None,
+                   "label": job["label"] if running else m.get("task"), "metrics": m}
+            if running and job["start_time"]:
+                out["elapsed_seconds"] = round(time.time() - job["start_time"])
+            self._respond(200, out)
+        elif path == "/checkpoints":
+            self._respond(200, {"task": q.get("task"), "runs": lab3_checkpoints(q.get("task"))[:20]})
+        elif path == "/runs":
+            self._respond(200, {"runs": [{"log": p.name, "mtime": p.stat().st_mtime,
+                                          "size": p.stat().st_size} for p in list_runs()[:50]]})
+        elif path == "/events":
+            since = int(q.get("since", 0) or 0)
+            self._respond(200, {"seq": _event_seq[0],
+                                "events": [e for e in EVENTS if e["seq"] > since]})
+        elif path == "/video/latest":
+            v = latest_video()
+            if not v:
+                return self._respond(404, {"error": "no recorded video yet; POST /record first"})
+            data = v.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("X-Video-Path", str(v))
+            self.send_header("X-Video-Mtime", str(int(v.stat().st_mtime)))
+            self.end_headers()
+            self.wfile.write(data)
         elif self.path == "/scenes":
             self._respond(200, {"scenes": list_scenes()})
         elif self.path == "/robots":
@@ -472,6 +694,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             return self._respond(400, {"error": f"bad json: {e}"})
 
+        record_event(self.path, body if isinstance(body, dict) else {})
+        try:
+            return self._post(body)
+        except LaunchError as e:
+            return self._respond(503, {"error": str(e)})
+        except Exception as e:   # never drop the connection without a reply
+            return self._respond(500, {"error": f"{type(e).__name__}: {e}"})
+
+    def _post(self, body):
         if self.path == "/open":
             return self._open(body)
         if self.path == "/sim/launch":
@@ -484,6 +715,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._exec(body)
         if self.path in ("/train", "/play", "/eval"):
             return self._rl(self.path.lstrip("/"), body)
+        if self.path == "/record":
+            return self._record(body)
         if self.path == "/stop":
             return self._stop()
         self._respond(404, {"error": f"unknown POST {self.path}"})
@@ -597,6 +830,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._respond(400, {"error": "missing 'task'"})
         if VALID_IDS and task not in VALID_IDS:
             return self._respond(400, {"error": f"unknown task {task}", "hint": "GET /envs"})
+        spec = ENV_BY_ID.get(task, {})
+        substituted = None
+        if spec and not spec.get("available", True):
+            alt = spec.get("alternative")
+            if not (alt and ENV_BY_ID.get(alt, {}).get("available")):
+                return self._respond(503, {"error": f"task {task} can't run on this host: "
+                                                    f"{spec.get('unavailable_reason')}",
+                                           "hint": "GET /envs lists the runnable tasks"})
+            # same robot, same terrain, on the stack this host has (robot_lab -> Isaac Lab 3)
+            substituted, task, spec = task, alt, ENV_BY_ID[alt]
+        if spec.get("launcher") == "isaaclab3":
+            return self._rl_isaaclab3(kind, task, body, substituted)
         table = TRAIN_SCRIPTS if kind == "train" else PLAY_SCRIPTS
         rel = table.get(backend)
         if not rel:
@@ -641,6 +886,78 @@ class Handler(BaseHTTPRequestHandler):
             info["applied_overrides"] = applied
             if skipped:
                 info["skipped_params"] = skipped  # unknown knob names, honestly reported
+        self._respond(200, info)
+
+    def _rl_isaaclab3(self, kind, task, body, substituted=None):
+        """Isaac Lab 3 tasks: `isaaclab {train|play} --rl_library rsl_rl ...` from
+        $ISAAC_LAB3_DIR via isaaclab3_launch.py. Headless is the CLI default; gui adds
+        the $ISAAC_LAB3_VIZ viewer (viser web viewer by default). eval has no Lab 3
+        equivalent here, so it runs play."""
+        if not LAB3_PYTHON.exists():
+            return self._respond(500, {"error": f"Isaac Lab 3 python missing: {LAB3_PYTHON}",
+                                       "hint": "set ISAAC_LAB3_DIR to an Isaac Lab 3 uv checkout"})
+        gui = bool(body.get("gui"))
+        viz = body.get("viz") or LAB3_VIZ
+        verb = "train" if kind == "train" else "play"
+        cmd = [str(LAB3_PYTHON), str(LAB3_LAUNCH), verb, "--rl_library", "rsl_rl", f"--task={task}"]
+        default_envs = (64 if gui else 4096) if kind == "train" else (16 if gui else 32)
+        cmd.append(f"--num_envs={body.get('num_envs', default_envs)}")
+        if gui:
+            cmd.append(f"--viz={viz}")
+        if kind == "train":
+            # Lab 3 defaults are huge (MicroDuck: 50000 its) — always bound the run.
+            cmd.append(f"--max_iterations={body.get('max_iterations', 1500)}")
+        if body.get("seed") is not None:
+            cmd.append(f"--seed={body['seed']}")
+        if kind != "train":
+            cmd.append(f"--checkpoint={resolve_checkpoint(task, body.get('checkpoint'))}")
+        elif body.get("checkpoint"):   # resume training from a checkpoint
+            cmd.append(f"--checkpoint={resolve_checkpoint(task, body.get('checkpoint'))}")
+        applied, skipped = list(ENV_BY_ID[task].get("default_overrides", [])), []
+        terms = known_reward_terms(task) if kind == "train" else None
+        if kind == "train":
+            for k, v in (body.get("params") or {}).items():
+                if k.startswith("reward_") and terms is not None and k[len("reward_"):] not in terms:
+                    skipped.append(k)   # unknown term: Hydra would abort the whole run
+                    continue
+                ov = knob_to_override(k, v)
+                (applied.append(ov) if ov else skipped.append(k))
+            applied += [str(ov) for ov in (body.get("overrides") or [])]
+        cmd += applied
+        os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
+        info = start_job(kind, task, cmd, str(LAB3_DIR))
+        info["launcher"] = "isaaclab3"
+        if substituted:
+            info["note"] = f"{substituted} isn't installed here; running {task} (same robot, Isaac Lab 3)"
+        if gui and viz == "viser":
+            info["viewer_url"] = f"http://localhost:{VISER_PORT}"
+        if kind == "train":
+            info["applied_overrides"] = applied
+            if skipped:
+                info["skipped_params"] = skipped
+                if terms:
+                    info["valid_reward_terms"] = sorted(terms)
+        self._respond(200, info)
+
+    def _record(self, body):
+        """Headless play of a trained policy that writes an mp4 (Isaac Lab 3 --video),
+        fetched afterwards from GET /video/latest — e.g. for a vision-model critique."""
+        if not self._guard_gpu():
+            return
+        task = body.get("task")
+        if ENV_BY_ID.get(task, {}).get("launcher") != "isaaclab3":
+            return self._respond(400, {"error": "recording needs an Isaac Lab 3 task",
+                                       "valid": [e["id"] for e in ENVIRONMENTS
+                                                 if e.get("launcher") == "isaaclab3"]})
+        steps = int(body.get("steps", 300))
+        cmd = [str(LAB3_PYTHON), str(LAB3_LAUNCH), "play", "--rl_library", "rsl_rl",
+               f"--task={task}", f"--num_envs={body.get('num_envs', 4)}",
+               f"--checkpoint={resolve_checkpoint(task, body.get('checkpoint'))}",
+               "--video", f"--video_length={steps}"]
+        cmd += list(ENV_BY_ID[task].get("default_overrides", []))
+        os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
+        info = start_job("record", task, cmd, str(LAB3_DIR))
+        info["video_url"] = "/video/latest"
         self._respond(200, info)
 
     def _stop(self):

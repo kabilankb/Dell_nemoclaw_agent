@@ -62,6 +62,16 @@ network_policies:
           - allow: { method: POST, path: "/v1/completions" }
           - allow: { method: GET, path: "/v1/models" }
           - allow: { method: GET, path: "/v1/models/**" }
+      # Nebius Token Factory (Nemotron, OpenAI-compatible API)
+      - host: api.tokenfactory.nebius.com
+        port: 443
+        protocol: rest
+        enforcement: enforce
+        rules:
+          - allow: { method: POST, path: "/v1/chat/completions" }
+          - allow: { method: POST, path: "/v1/completions" }
+          - allow: { method: GET, path: "/v1/models" }
+          - allow: { method: GET, path: "/v1/models/**" }
       - host: inference.local
         port: 443
         protocol: rest

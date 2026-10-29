@@ -43,8 +43,12 @@ function once(useProxy, method, path, data){
                      ...(data ? { "Content-Length": Buffer.byteLength(data) } : {}) } };
     const req = http.request(opts, (res)=>{
       let b=""; res.on("data",d=>b+=d);
-      res.on("end",()=>{ (res.statusCode>=200 && res.statusCode<400) ? resolve(b)
-                         : reject(new Error(`HTTP ${res.statusCode} via ${useProxy?"proxy":"direct"}`)); });
+      res.on("end",()=>{
+        if (res.statusCode>=200 && res.statusCode<400) return resolve(b);
+        // the control server's own errors (409 GPU busy, 503 not installed, …) are JSON
+        // with an "error" field: hand them to the model instead of a bare status code
+        try { const o = JSON.parse(b); if (o && o.error) return resolve(b); } catch {}
+        reject(new Error(`HTTP ${res.statusCode} via ${useProxy?"proxy":"direct"}`)); });
     });
     req.setTimeout(8000, ()=>req.destroy(new Error("timeout")));
     req.on("error", reject);
@@ -75,7 +79,9 @@ async function catalog(){
   _cat = {
     envs:   tpl && tpl.environments ? Object.keys(tpl.environments) : null,
     robots: Array.isArray(rob) ? rob : (rob && Array.isArray(rob.robots) ? rob.robots : null),
-    tasks:  env && Array.isArray(env.environments) ? env.environments.map(e=>e.id).filter(Boolean) : null,
+    // only tasks this host can actually launch (the server tags each with `available`)
+    tasks:  env && Array.isArray(env.environments)
+            ? env.environments.filter(e=>e.available!==false).map(e=>e.id).filter(Boolean) : null,
   };
   return _cat;
 }
@@ -92,12 +98,12 @@ async function buildTools(){
         anchor:{ type:"string", description:"optional named spawn location within the env (e.g. pick_station/entrance/center/dock); omit for the env default" } },
         required:["env"] } },
     { name:"list_robots", description:"List available robot keys from the live catalog.", inputSchema:{type:"object",properties:{}} },
-    { name:"list_environments", description:"List available RL training task/environment ids (live).", inputSchema:{type:"object",properties:{}} },
+    { name:"list_environments", description:"List the RL training task ids this machine can run (live). Humanoids: Isaac-Velocity-{Flat,Rough}-G1 / -H1; biped: MicroDuck, Cassie; quadrupeds: Isaac-Velocity-*-UnitreeGo2 / -AnymalD.", inputSchema:{type:"object",properties:{}} },
     { name:"list_scenes", description:"List built scene USDs on disk.", inputSchema:{type:"object",properties:{}} },
     { name:"list_templates", description:"List openable environments and composite templates (live).", inputSchema:{type:"object",properties:{}} },
     { name:"sim_status", description:"Get the current sim/GPU job status (sim or training) — coarse: running, kind, pid, elapsed.", inputSchema:{type:"object",properties:{}} },
-    { name:"training_status", description:"DETAILED training/job status: job info PLUS the tail of the live log (iterations, episode rewards, total timesteps, iteration time, ETA). Use whenever asked about training progress / 'how is the training going' / 'training status'. Report the latest iteration, key reward terms, timesteps, and ETA from the log.", inputSchema:{type:"object",properties:{lines:{type:"integer",description:"log lines to include (default 60)"}}} },
-    { name:"train_task", description:"Start RL training for a task id. ONE GPU job at a time — close any running job first. AMP dance tasks (id contains 'AMP-Dance') REQUIRE backend='skrl' and algorithm='amp'. gui=true opens a visible window (few envs); headless is faster with many envs.",
+    { name:"training_status", description:"DETAILED, STRUCTURED training status of the current (or last) run: iteration/max, mean_reward, reward_history (the curve), fell_over (fraction of episodes ending in a fall), terminations, reward_terms, action_std, mean_episode_length, ETA, error. Use for 'how is the training going', and BEFORE any tuning decision: read the curve (rising / flat / falling) and fall rate, then pick knobs from isaac__tuning_guide.", inputSchema:{type:"object",properties:{lines:{type:"integer",description:"log lines to include (default 60)"}}} },
+    { name:"train_task", description:"Start RL training for a task id. ONE GPU job at a time — close any running job first (stop_training), e.g. when retraining with tuned params. AMP dance tasks (id contains 'AMP-Dance') REQUIRE backend='skrl' and algorithm='amp'. gui=true opens a visible window (few envs); headless is faster with many envs.",
       inputSchema:{ type:"object", properties:{
         task: S("RL task id (live list from isaac__list_environments)", c.tasks),
         backend:{ type:"string", description:"rsl_rl | skrl | cusrl (default rsl_rl); AMP dance needs skrl" },
@@ -129,33 +135,29 @@ async function call(name, a){
   a = a || {};
   if (name==="open_scene"){ const b={env:a.env,gui:true}; if(a.robot) b.robot=a.robot; if(a.anchor) b.anchor=a.anchor; return fetchCS("POST","/open",b); }
   if (name==="list_robots") return fetchCS("GET","/robots");
-  if (name==="list_environments") return fetchCS("GET","/envs");
+  if (name==="list_environments"){
+    const raw = await fetchCS("GET","/envs");
+    try { const o = JSON.parse(raw); if (!Array.isArray(o.environments)) return raw;
+          const envs = o.environments.filter(e=>e.available!==false).map(({available, ...e})=>e);
+          return JSON.stringify({ environments: envs, count: envs.length }); } catch { return raw; }
+  }
   if (name==="list_scenes") return fetchCS("GET","/scenes");
   if (name==="list_templates") return fetchCS("GET","/templates");
   if (name==="sim_status") return fetchCS("GET","/status");
   if (name==="training_status"){
     const pj = (t)=>{ try{ return JSON.parse(t); }catch{ return t; } };
-    const n = Number(a.lines) || 200;
-    const [st, lg] = await Promise.all([ fetchCS("GET","/status"), fetchCS("GET","/logs?lines="+n) ]);
-    const status = pj(st);
+    const [tr, lg] = await Promise.all([ fetchCS("GET","/training"), fetchCS("GET","/logs?lines="+(Number(a.lines)||15)) ]);
+    const t = pj(tr) || {}, m = (t && t.metrics) || {};
+    const hist = m.reward_history || [];
+    // a compact curve summary so the model can judge the trend without 400 numbers
+    const at = (f)=> hist.length ? hist[Math.min(hist.length-1, Math.floor(f*(hist.length-1)))] : null;
+    const curve = hist.length ? { first: hist[0], at_25pct: at(.25), at_50pct: at(.5), at_75pct: at(.75), last: hist[hist.length-1],
+                                  best: Math.max(...hist), points: hist.length } : null;
+    const { reward_history, ...rest } = m;
     const logObj = pj(lg);
-    let text = (logObj && typeof logObj.lines === "string") ? logObj.lines
-             : Array.isArray(logObj && logObj.lines) ? logObj.lines.join("\n")
-             : (typeof logObj === "string" ? logObj : "");
-    const lines = text.split(/\r?\n/);
-    const last = (re, grp=1)=>{ for(let i=lines.length-1;i>=0;i--){ const m=lines[i].match(re); if(m) return m[grp]; } return null; };
-    const rewards = {};
-    for (const l of lines){ const m=l.match(/Episode_Reward\/(\S+):\s*(-?\d[\d.eE+-]*)/); if(m) rewards[m[1]]=parseFloat(m[2]); }
-    const summary = {
-      iteration: last(/(?:Learning iteration|Iteration)\s*[:#]?\s*([\d]+\s*\/\s*[\d]+|[\d]+)/),
-      total_timesteps: last(/Total timesteps:\s*([\d]+)/),
-      iteration_time_s: last(/Iteration time:\s*([\d.]+)/),
-      eta: last(/ETA:\s*([\d:]+)/),
-      mean_reward: last(/[Mm]ean (?:episode )?reward:?\s*(-?[\d.]+)/),
-      fps: last(/(?:fps|FPS|steps\/s)[:=]?\s*([\d.]+)/),
-      reward_terms: rewards,
-    };
-    return JSON.stringify({ status, summary, log_file: logObj && logObj.log_file, log_tail: lines.slice(-25).join("\n") }, null, 2);
+    return JSON.stringify({ running: t.running, label: t.label, elapsed_seconds: t.elapsed_seconds,
+                            metrics: rest, reward_curve: curve,
+                            log_tail: logObj && typeof logObj.lines==="string" ? logObj.lines.split(/\r?\n/).slice(-15).join("\n") : "" }, null, 2);
   }
   if (name==="close_sim" || name==="stop_training") return fetchCS("POST","/stop",{});
   if (name==="train_task"){
@@ -190,7 +192,7 @@ process.stdin.on("data", async d => {
     if(!line) continue;
     let m; try{ m = JSON.parse(line); }catch{ continue; }
     const { id, method, params } = m;
-    if(method==="initialize") send({jsonrpc:"2.0",id,result:{protocolVersion:"2024-11-05",capabilities:{tools:{}},serverInfo:{name:"isaac",version:"1.3.0"}}});
+    if(method==="initialize") send({jsonrpc:"2.0",id,result:{protocolVersion:"2024-11-05",capabilities:{tools:{}},serverInfo:{name:"isaac",version:"1.4.0"}}});
     else if(method==="tools/list") send({jsonrpc:"2.0",id,result:{tools: await buildTools()}});
     else if(method==="tools/call"){ const text = await call(params&&params.name, params&&params.arguments); send({jsonrpc:"2.0",id,result:{content:[{type:"text",text}]}}); }
     else if(method==="ping") send({jsonrpc:"2.0",id,result:{}});

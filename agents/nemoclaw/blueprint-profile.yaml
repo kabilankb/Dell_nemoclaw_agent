@@ -8,6 +8,7 @@
 # Switch model by selecting a profile at onboard time, or `openshell policy set`.
 
 profiles:
+  - nebius        # Nemotron on Nebius Token Factory (needs NEBIUS_API_KEY) — hackathon default
   - default       # NVIDIA cloud Nemotron (needs NVIDIA_API_KEY)
   - nim-local     # local NIM container
   - vllm          # local vLLM server
@@ -15,6 +16,11 @@ profiles:
 components:
   inference:
     profiles:
+      nebius:
+        provider_type: "openai"
+        endpoint: "https://api.tokenfactory.nebius.com/v1"
+        model: "nvidia/nemotron-3-super-120b-a12b"
+        credential_env: "NEBIUS_API_KEY"
       default:
         provider_type: "nvidia"
         endpoint: "https://integrate.api.nvidia.com/v1"

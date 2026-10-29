@@ -22,7 +22,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MCP_SRC="$HERE/isaac-mcp.mjs"
 [[ -f "$MCP_SRC" ]] || { echo "error: $MCP_SRC not found" >&2; exit 1; }
 
-CT="$(docker ps --format '{{.Names}}' | grep -iE "openshell-${SB}-" | head -1 || true)"
+CT="$(docker ps --format '{{.Names}}' | grep -iE "^openshell-([a-z0-9_-]+--)?${SB}-" | head -1 || true)"
 [[ -z "$CT" ]] && { echo "error: no running container for sandbox '$SB' (nemoclaw list?)" >&2; exit 1; }
 echo "→ sandbox '$SB' → container $CT"
 
@@ -48,7 +48,9 @@ chown sandbox:sandbox /sandbox/.openclaw/openclaw.json /sandbox/.openclaw/.confi
 
 echo "  [3/5] AGENTS.md guidance"
 docker exec "$CT" bash -lc 'A=/sandbox/.openclaw/workspace/AGENTS.md; touch "$A"
-if ! grep -q "Isaac Sim control (USE THESE TOOLS)" "$A"; then cat >> "$A" <<"MD"
+# replace an older copy of this section (it is always the last one in the file)
+sed -i "/^## Isaac Sim control (USE THESE TOOLS)/,\$d" "$A"
+cat >> "$A" <<"MD"
 
 ## Isaac Sim control (USE THESE TOOLS)
 
@@ -60,13 +62,16 @@ exec, curl, node, fetch, or shell for Isaac — call the tool directly:
 - what scenes -> isaac__list_scenes
 - status / is it running (quick) -> isaac__sim_status
 - training progress / "how is the training going" / detailed status -> isaac__training_status
-    (returns job info + live log tail: iteration, rewards, timesteps, ETA — report those precisely)
+    (structured: iteration, mean_reward, reward_curve, fell_over = fraction of episodes ending
+    in a fall, reward_terms, ETA — report those precisely)
 - open/launch the sim (e.g. "open the warehouse with spot", "open hospital with agibot_a2d")
     -> isaac__open_scene {env, robot?, anchor?}   (ANY robot works in ANY environment)
 - close/stop the sim -> isaac__close_sim
 - train / run a task (e.g. "train the G1 dance task, gui, 2 envs") -> isaac__train_task {task, backend?, algorithm?, num_envs?, gui?}
-    * task ids come from isaac__list_environments. AMP dance (id contains "AMP-Dance")
-      REQUIRES backend="skrl" and algorithm="amp".
+    * task ids come from isaac__list_environments (only tasks this machine can run).
+      Humanoids: "G1" -> Isaac-Velocity-Flat-G1 / Isaac-Velocity-Rough-G1, "H1" -> Isaac-Velocity-*-H1.
+      MicroDuck -> IsaacContrib-Velocity-{Flat,Rough}-MicroDuck. AMP dance (id contains
+      "AMP-Dance") REQUIRES backend="skrl" and algorithm="amp".
     * only ONE GPU job at a time — close the running job first.
 - stop training / cancel the run / kill the job -> isaac__stop_training
 - tuned / advised-parameter training (e.g. "train the Go2, tuned for sim2real / more exploration / fix shuffling"):
@@ -74,12 +79,17 @@ exec, curl, node, fetch, or shell for Isaac — call the tool directly:
     2) pick values for the requirement, then isaac__train_task {task, num_envs, params:{...}}
        (friendly knobs: learning_rate, entropy_coef, gamma, clip_param, num_steps_per_env, reward_<term>...)
     Never invent hyperparameters — take them from the guide safe ranges.
+- "tune it" / "make it better" / "fix the falling" on a RUNNING job:
+    1) isaac__training_status -> read reward_curve trend + fell_over
+    2) isaac__tuning_guide -> map the symptom to 2-3 knobs (e.g. falls a lot -> lower
+       learning_rate, raise a stability reward; reward flat -> raise entropy_coef)
+    3) isaac__stop_training, then isaac__train_task with the SAME task/gui/num_envs + params
+    4) say exactly what you changed and why, in a short list.
 - play/evaluate (INFERENCE for) a trained policy -> isaac__play_policy / isaac__eval_policy {task, checkpoint?}
 The valid env/robot/task values are supplied LIVE in each tool schema (fetched from the
 control server), and isaac__list_* returns the authoritative lists. Report ONLY the JSON the
 tool returns; never invent names. Count arrays for "how many".
 MD
-fi
 chown sandbox:sandbox "$A"'
 
 echo "  [5/5] reload via recover"

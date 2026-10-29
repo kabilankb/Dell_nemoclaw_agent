@@ -1,7 +1,8 @@
 # NemoClaw × Isaac — Runbook
 
-Drive **Isaac Sim / Isaac Lab** from the NemoClaw sandbox chat (local model:
-`gemma4-31b` or `nemotron-3-super:120b` via Ollama). You talk in plain English;
+Drive **Isaac Sim / Isaac Lab** from the NemoClaw sandbox chat. The model is
+Nemotron on **Nebius Token Factory** (OpenAI-compatible, `NEBIUS_MODEL` in
+`~/.openclaw/.env`); a local Ollama model also works. You talk in plain English;
 the model calls dedicated `isaac__*` tools that hit the host **Isaac Control
 Server** on `:5561`.
 
@@ -24,10 +25,15 @@ NemoClaw sandbox (container)  ──isaac__ MCP tools──▶  host Control Ser
 ## One-time setup (already done; redo only if the sandbox is rebuilt)
 
 ```bash
-cd /home/dgx-destro/isaac-claw/agents/nemoclaw
+cd "$ISAAC_CLAW_DIR/agents/nemoclaw"
 
-# 1. create the sandbox (interactive): pick Local Ollama + a tool-capable model
-nemoclaw onboard                     # model e.g. gemma4-31b:latest or nemotron-3-super:120b
+# 1. create the sandbox. Nebius Token Factory, non-interactive (key in ~/.openclaw/.env):
+set -a; . ~/.openclaw/.env; set +a
+COMPATIBLE_API_KEY="$NEBIUS_API_KEY" NEMOCLAW_NON_INTERACTIVE=1 NEMOCLAW_ACCEPT_THIRD_PARTY_SOFTWARE=1 \
+NEMOCLAW_PROVIDER=custom NEMOCLAW_ENDPOINT_URL=https://api.tokenfactory.nebius.com/v1 \
+NEMOCLAW_MODEL=nvidia/nemotron-3-super-120b-a12b NEMOCLAW_GATEWAY_PORT=8090 \
+  nemoclaw onboard --name isaacsim --non-interactive
+#    (or interactive `nemoclaw onboard` and pick Local Ollama + a tool-capable model)
 
 # 2. provision it end-to-end (skills + 5561 policy + dedicated MCP tools)
 ./install_skill.sh isaacsim
@@ -36,11 +42,67 @@ nemoclaw onboard                     # model e.g. gemma4-31b:latest or nemotron-
 cd ../openclaw && bash install-control-service.sh
 ```
 
-Switch model any time:
+Switch model any time — from the console's model picker, or:
 ```bash
-nemoclaw inference set --provider ollama-local --model gemma4-31b:latest --sandbox isaacsim --no-verify
-nemoclaw isaacsim recover
+COMPATIBLE_API_KEY="$NEBIUS_API_KEY" nemoclaw inference set --provider compatible-endpoint \
+  --model nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B --sandbox isaacsim \
+  --endpoint-url https://api.tokenfactory.nebius.com/v1 --credential-env COMPATIBLE_API_KEY \
+  --inference-api openai-completions
 ```
+NemoClaw 0.0.137 often ends this with a gateway "health timeout"; the route is still
+committed and the next turn runs on the new model. Set `NEBIUS_MODEL` in
+`~/.openclaw/.env` so `./demo.sh up` keeps it.
+
+---
+
+## Web console (hackathon demo)
+
+```bash
+./demo.sh check     # pre-flight: key + model answer, GPU memory/other GPU users, ports, checkpoints
+./demo.sh up        # control server + NemoClaw sandbox + console → http://localhost:8800
+./demo.sh status
+./demo.sh down      # stops console, server, GPU job, sandbox (keeps the gateway)
+```
+
+One page (`web/console_server.py`, `web/console/index.html`) with:
+
+- **Nebius inference** — active model, a model picker (Nano / Super / Ultra / Lightning,
+  ~45 s to switch), and the key box. A new key is verified against Token Factory,
+  saved to `~/.openclaw/.env` and pushed into the sandbox, so rotating needs no rebuild.
+- **Live view** — the viser web viewer (`:8012`) for any `gui` run. Set
+  `ISAAC_LAB3_VIZ=newton_gl` on the control server for a desktop window instead.
+- **Training** — progress, reward curve, fall rate, plus:
+  - **Tune it**: the claw reads `isaac__training_status` + the tuning guide, stops the
+    run and restarts it with 2–3 changed params. Unknown `reward_<term>` knobs are
+    dropped by the server (it knows the task's terms from earlier logs) instead of
+    crashing the launch.
+  - **Critique the gait**: records a headless clip of the best checkpoint, sends six
+    frames to `nvidia/Nemotron-3.5-Super-VL` on Token Factory, shows clip + verdict.
+  - **Replay**: animates a past run's reward curve — the fallback when the GPU or the
+    network is not available on stage.
+- **Claw chat** — one `openclaw agent` turn per message, in a session per page load
+  (reload = fresh session), with the tool calls shown live as they hit the server.
+
+### Before the demo
+
+1. Train a full policy off-stage (`train the microduck on flat ground, headless, 4096
+   envs, 1500 iterations`, ~25 min). `play` and the critique use the **most-trained**
+   checkpoint of the task, not the newest run folder.
+2. `./demo.sh check` until it says Ready; record a fallback screen capture.
+3. Rotate the Nebius key (paste the new one into the console's key box).
+
+### Training on a Nebius AI Cloud GPU
+
+Clone this repo and Isaac Lab 3 (`~/IsaacLab-develop`, uv) on a Nebius GPU VM, then:
+
+```bash
+./demo.sh up --gpu-host ubuntu@<vm-ip> --gpu-dir ~/isaac-claw     # or ISAAC_GPU_HOST in .env
+```
+
+`up` starts the control server on the VM and tunnels it to `:5561` here (also on the
+sandbox's `host.openshell.internal`, so the claw's tools are unchanged) and the viser
+viewer to `:8012`. Training metrics, checkpoints and critique clips come over the same
+tunnel; the console, the sandbox and the key stay on the laptop.
 
 ---
 
@@ -85,9 +147,20 @@ train the Unitree Go2 on rough terrain, headless, 4096 envs
 train the Go2 rough, headless, 500 envs, tuned for stable locomotion
 train the Go2 rough, 500 envs, with entropy_coef 0.015, learning_rate 1e-3, gamma 0.99
 train the G1 dance task, gui, 2 envs           # AMP dance → skrl + amp (auto)
+train the microduck on flat ground, headless, 4096 envs, 1500 iterations
+train the microduck on rough terrain, gui, 64 envs
+play the microduck rough policy
 ```
-- Trainable: **Go2, A1, B2, Lite3, ZSL1, MagicDog, Agibot D1**, the humanoids
-  (XBot, G1, H1, …), G1 AMP-Dance, G1 BeyondMimic, A1 Handstand, SO101 PickOrange.
+- **Isaac Lab 3 tasks** run from `$ISAAC_LAB3_DIR` (default `~/IsaacLab-develop`, uv)
+  via `isaaclab train --rl_library rsl_rl`, capped at 1500 iterations unless you give a
+  number, with the viser web viewer for `gui`:
+  MicroDuck (`IsaacContrib-Velocity-{Flat,Rough}-MicroDuck`, `presets=backlash`),
+  humanoids **G1 / H1** (`Isaac-Velocity-{Flat,Rough}-G1|H1`), **Cassie**, **Go2**
+  (`-UnitreeGo2`), **ANYmal-D** (`-AnymalD`).
+- **robot_lab tasks** (`RobotLab-*`: XBot, GR1, Booster T1, AMP-Dance, …) need
+  `ISAAC_LAB_PYTHON` with `robot_lab` installed. `/envs` marks each task `available`;
+  the claw only sees runnable ones. Asking for a robot_lab G1/H1/Go2 task on a host
+  without robot_lab runs the Isaac Lab 3 task for the same robot instead.
 - **Spot is NOT trainable** (spawn-only — no registered task).
 - "tuned" → the model reads `isaac__tuning_guide` (advised ranges + symptom→knob
   table from `policies/rsl_rl.md`) and sets `params`.
@@ -144,6 +217,9 @@ curl -s http://localhost:5561/status               # quick health
 | Model hallucinates instead of calling tools | Switch to a tool-capable model (`gemma4-31b` / `nemotron-3-super:120b`). |
 | "unknown task" on train | It's not registered — `list training tasks`; Spot etc. are spawn-only. |
 | GUI training dies with Kit assert ("Recursion not allowed") | Train **headless**; use `play` to watch. |
+| Console chat answers without calling tools | Old session memory. Reload the page (new session). |
+| "can't run on this host: 'robot_lab' is not installed" | Use the `Isaac-Velocity-*` task for that robot, or install robot_lab into `ISAAC_LAB_PYTHON`. |
+| Critique says "no new video" | `moviepy` missing in the Isaac Lab 3 venv: `uv pip install --python ~/IsaacLab-develop/.venv/bin/python moviepy`. |
 | Multi-turn session wedged | Start a fresh session; the main session key runs on-host. |
 
 ---

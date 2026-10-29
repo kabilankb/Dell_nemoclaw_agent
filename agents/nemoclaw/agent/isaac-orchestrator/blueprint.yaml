@@ -31,6 +31,15 @@ components:
 
   inference:
     profiles:
+      # Nemotron served by Nebius Token Factory (OpenAI-compatible).
+      nebius:
+        provider_type: "openai"
+        provider_name: "nebius-token-factory"
+        endpoint: "https://api.tokenfactory.nebius.com/v1"
+        model: "nvidia/nemotron-3-super-120b-a12b"
+        credential_env: "NEBIUS_API_KEY"
+        timeout_secs: 180
+
       default:
         provider_type: "nvidia"
         provider_name: "nvidia-inference"

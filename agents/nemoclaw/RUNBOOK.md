@@ -83,6 +83,14 @@ One page (`web/console_server.py`, `web/console/index.html`) with:
 - **Claw chat** — one `openclaw agent` turn per message, in a session per page load
   (reload = fresh session), with the tool calls shown live as they hit the server.
 
+### Duck pilot (Hermes agent: train → play → sim2real)
+
+A second agent, `duckpilot` (Hermes in its own NemoClaw sandbox, Nemotron on Nebius),
+runs the MicroDuck pipeline by itself: train → fall-rate gate → auto-tune + retrain →
+play (clip + ONNX export) → verify → deploy to the real duck (`DUCK_HOST`, after the
+user confirms it is on its stand). Set up with `agents/hermes/install_duckpilot.sh`;
+details in `agents/hermes/README.md`. In the console, use the **Duck pilot** tab.
+
 ### Before the demo
 
 1. Train a full policy off-stage (`train the microduck on flat ground, headless, 4096

@@ -55,6 +55,8 @@ NEBIUS_URL = os.environ.get("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.
 ENV_FILE = Path(os.environ.get("NEBIUS_ENV_FILE", "~/.openclaw/.env")).expanduser()
 
 SANDBOX = os.environ.get("NEMOCLAW_SANDBOX", "isaacsim")
+# The Hermes duck-pilot agent (agents/hermes): train -> play -> sim2real deploy.
+PILOT = os.environ.get("DUCKPILOT_SANDBOX", "duckpilot")
 GATEWAY_PORT = os.environ.get("NEMOCLAW_GATEWAY_PORT", "8090")
 CHAT_TIMEOUT = int(os.environ.get("CONSOLE_CHAT_TIMEOUT", "280"))
 VISION_MODEL = os.environ.get("NEBIUS_VISION_MODEL", "nvidia/Nemotron-3.5-Super-VL")
@@ -94,24 +96,24 @@ def find_exe(name: str) -> str | None:
     return None
 
 
-def sandbox_container() -> str | None:
+def sandbox_container(name: str = SANDBOX) -> str | None:
     try:
         out = subprocess.run(["docker", "ps", "--format", "{{.Names}}"],
                              capture_output=True, text=True, timeout=5).stdout
     except (OSError, subprocess.TimeoutExpired):
         return None
-    for name in out.split():
-        if re.match(rf"^openshell-([a-z0-9_-]+--)?{re.escape(SANDBOX)}-", name):
-            return name
+    for ct in out.split():
+        if re.match(rf"^openshell-([a-z0-9_-]+--)?{re.escape(name)}-", ct):
+            return ct
     return None
 
 
-def sandbox_inference() -> dict:
+def sandbox_inference(name: str = SANDBOX) -> dict:
     """The sandbox's onboarded model/provider/endpoint (no credentials) from
     NemoClaw's registry, ~/.nemoclaw/gateways/<port>/sandboxes.json."""
     reg = Path.home() / ".nemoclaw" / "gateways" / GATEWAY_PORT / "sandboxes.json"
     try:
-        sb = json.loads(reg.read_text()).get("sandboxes", {}).get(SANDBOX, {})
+        sb = json.loads(reg.read_text()).get("sandboxes", {}).get(name, {})
     except (OSError, json.JSONDecodeError):
         return {}
     prov = sb.get("modelSelectionProvenance") or {}
@@ -243,7 +245,9 @@ JOBS: dict[str, dict] = {}
 
 # control-server POST path -> the isaac__ tool that sends it
 TOOL_FOR_PATH = {"/train": "train_task", "/play": "play_policy", "/eval": "eval_policy",
-                 "/stop": "stop_training", "/open": "open_scene"}
+                 "/stop": "stop_training", "/open": "open_scene",
+                 "/pipeline/start": "duck_pipeline_start", "/pipeline/deploy": "duck_deploy_confirm",
+                 "/pipeline/stop": "duck_pipeline_stop"}
 
 
 def control_seq() -> int:
@@ -355,6 +359,37 @@ VIDEO_CACHE: dict[str, bytes] = {}
 MODEL_SWITCH = {"busy": False}
 
 
+def pilot_turn(_jid: str, message: str, session: str = "") -> dict:
+    """One Hermes turn in the duck-pilot sandbox, in a named session per page load."""
+    exe = find_exe("nemohermes") or find_exe("nemoclaw")
+    if not exe:
+        return {"error": "nemohermes CLI not found"}
+    if not sandbox_container(PILOT):
+        return {"error": f"duck-pilot sandbox '{PILOT}' is not running",
+                "hint": "./demo.sh up (or agents/hermes/install_duckpilot.sh)"}
+    sid = re.sub(r"[^a-z0-9-]", "", session.lower())[:40] or "default"
+    b64 = base64.b64encode(message.encode()).decode()
+    inner = (f"cd /sandbox && echo {b64} | base64 -d > /tmp/_pilot_{sid} && "
+             f"HOME=/sandbox HERMES_HOME=/sandbox/.hermes hermes chat -Q --yolo -s duck-pilot "
+             f"--continue console-{sid} --create-if-missing --query-file /tmp/_pilot_{sid}")
+    env = dict(os.environ, NEMOCLAW_GATEWAY_PORT=GATEWAY_PORT)
+    t0 = time.time()
+    try:
+        proc = subprocess.run([exe, PILOT, "exec", "--no-tty", "--timeout", str(CHAT_TIMEOUT), "--",
+                               "bash", "-lc", inner],
+                              capture_output=True, text=True, env=env, timeout=CHAT_TIMEOUT + 30)
+    except subprocess.TimeoutExpired:
+        return {"error": f"duck pilot turn timed out after {CHAT_TIMEOUT}s"}
+    # -Q prints only warnings, a session_id line, then the final answer
+    lines = [l for l in proc.stdout.splitlines()
+             if not re.match(r"^\s*(Warning:|⚠|session_id:)", l)]
+    reply = "\n".join(lines).strip()
+    if not reply:
+        return {"error": "duck pilot returned no reply", "detail": (proc.stderr or proc.stdout)[-800:]}
+    return {"reply": reply, "model": sandbox_inference(PILOT).get("model"), "tools": [],
+            "elapsed_s": round(time.time() - t0, 1), "agent": "duck pilot"}
+
+
 def _find_key(obj, key):
     """Return the dict that holds `key` anywhere inside a parsed JSON envelope."""
     if isinstance(obj, dict):
@@ -414,6 +449,8 @@ class Handler(BaseHTTPRequestHandler):
                 "key_configured": bool(key),
                 "key_hint": key_hint(key),
                 "inference": sandbox_inference(),
+                "pilot": bool(sandbox_container(PILOT)),
+                "pilot_name": PILOT,
             })
         elif self.path == "/api/key":
             key = read_key()
@@ -425,6 +462,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._respond(200, control("GET", "/training" + (f"?{qs}" if qs else "")))
             except (urllib.error.URLError, OSError) as e:
                 self._respond(200, {"error": f"control server unreachable: {e}"})
+        elif self.path == "/api/pipeline":
+            try:
+                self._respond(200, control("GET", "/pipeline"))
+            except (urllib.error.URLError, OSError) as e:
+                self._respond(200, {"status": "unknown", "error": str(e)})
         elif self.path == "/api/runs":
             try:
                 self._respond(200, control("GET", "/runs"))
@@ -486,7 +528,8 @@ class Handler(BaseHTTPRequestHandler):
             msg = str(body.get("message", "")).strip()
             if not msg:
                 return self._respond(400, {"error": "empty message"})
-            self._respond(200, {"id": start_job("chat", chat_turn, msg, str(body.get("session", "")))})
+            turn = pilot_turn if body.get("agent") == "pilot" else chat_turn
+            self._respond(200, {"id": start_job("chat", turn, msg, str(body.get("session", "")))})
         elif self.path == "/api/critique":
             task = str(body.get("task") or "IsaacContrib-Velocity-Flat-MicroDuck")
             self._respond(200, {"id": start_job("critique", critique, task, int(body.get("steps", 300)))})

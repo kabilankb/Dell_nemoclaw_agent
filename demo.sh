@@ -15,6 +15,7 @@
 #   NEBIUS_BASE_URL=https://api.tokenfactory.nebius.com/v1
 #   ISAAC_GPU_HOST=user@vm             default for --gpu-host
 #   ISAAC_GPU_DIR=~/isaac-claw         repo path on the GPU host
+#   DUCK_HOST=microduck@<ip>           the real duck (duck pilot deploys there; unset = dry run)
 #
 # `down` stops only the sandbox, not the OpenShell gateway: a full `nemoclaw stop`
 # also stops the gateway, and only `nemoclaw onboard` brings that back (done
@@ -29,6 +30,7 @@ export ISAAC_CLAW_DIR="$HERE"
 export PATH="$HOME/.local/bin:$PATH"
 export NEMOCLAW_GATEWAY_PORT="${NEMOCLAW_GATEWAY_PORT:-8090}"   # 8080 is often taken
 export NEMOCLAW_SANDBOX="${NEMOCLAW_SANDBOX:-isaacsim}"
+export DUCKPILOT_SANDBOX="${DUCKPILOT_SANDBOX:-duckpilot}"   # Hermes agent (agents/hermes)
 export DISPLAY="${DISPLAY:-:1}"
 NEBIUS_MODEL="${NEBIUS_MODEL:-nvidia/nemotron-3-super-120b-a12b}"
 export NEBIUS_BASE_URL="${NEBIUS_BASE_URL:-https://api.tokenfactory.nebius.com/v1}"
@@ -42,7 +44,8 @@ mkdir -p "$LOGS"
 
 listening() { ss -ltn 2>/dev/null | grep -q ":$1 "; }
 pid_on()    { ss -ltnp 2>/dev/null | grep ":$1 " | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2; }
-sandbox_up() { docker ps --format '{{.Names}}' | grep -qE "^openshell-([a-z0-9_-]+--)?${NEMOCLAW_SANDBOX}-"; }
+sandbox_up() { docker ps --format '{{.Names}}' | grep -qE "^openshell-([a-z0-9_-]+--)?${1:-$NEMOCLAW_SANDBOX}-"; }
+pilot_registered() { grep -q "\"$DUCKPILOT_SANDBOX\"" "$HOME/.nemoclaw/gateways/$NEMOCLAW_GATEWAY_PORT/sandboxes.json" 2>/dev/null; }
 say() { printf '%-16s %s\n' "$1" "$2"; }
 
 start_bg() {  # name port command...
@@ -197,6 +200,14 @@ case "$cmd" in
                  || { say sandbox "FAILED — see $LOGS/sandbox-start.log"; exit 1; }
     fi
     sync_model
+    if pilot_registered; then
+      if sandbox_up "$DUCKPILOT_SANDBOX"; then say duck-pilot "already up ($DUCKPILOT_SANDBOX)"
+      else
+        nemohermes "$DUCKPILOT_SANDBOX" start > "$LOGS/duckpilot-start.log" 2>&1 || true
+        sandbox_up "$DUCKPILOT_SANDBOX" && say duck-pilot "up ($DUCKPILOT_SANDBOX)" \
+          || say duck-pilot "FAILED — see $LOGS/duckpilot-start.log (console still works)"
+      fi
+    fi
     start_bg console "$CONSOLE_PORT" python3 "$HERE/web/console_server.py"
     echo
     echo "Open http://localhost:$CONSOLE_PORT"
@@ -206,12 +217,14 @@ case "$cmd" in
     curl -s -m 20 -X POST "http://127.0.0.1:$CONTROL_PORT/stop" > /dev/null 2>&1 || true
     stop_port control-server "$CONTROL_PORT"   # with --gpu-host this closes the tunnel
     if sandbox_up; then nemoclaw "$NEMOCLAW_SANDBOX" stop > /dev/null 2>&1; say sandbox "stopped"; else say sandbox "not running"; fi
+    if sandbox_up "$DUCKPILOT_SANDBOX"; then nemohermes "$DUCKPILOT_SANDBOX" stop > /dev/null 2>&1; say duck-pilot "stopped"; fi
     ;;
   check) check ;;
   status)
     listening "$CONTROL_PORT"         && say control-server "up (:$CONTROL_PORT)" || say control-server "down"
     listening "$NEMOCLAW_GATEWAY_PORT" && say gateway "up (:$NEMOCLAW_GATEWAY_PORT)" || say gateway "down"
     sandbox_up                         && say sandbox "up ($NEMOCLAW_SANDBOX, $(sandbox_model))" || say sandbox "down"
+    pilot_registered && { sandbox_up "$DUCKPILOT_SANDBOX" && say duck-pilot "up ($DUCKPILOT_SANDBOX)" || say duck-pilot "down"; }
     listening "$VISER_PORT"           && say viewer "up (:$VISER_PORT)" || say viewer "down (no gui run)"
     listening "$CONSOLE_PORT"         && say console "up — http://localhost:$CONSOLE_PORT" || say console "down"
     ;;

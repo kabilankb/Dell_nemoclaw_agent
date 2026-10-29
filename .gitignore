@@ -38,3 +38,6 @@ agents/core/workspace/logs/
 # --- OS / editor ---
 .DS_Store
 *.swp
+
+# duck-pilot deploy bundles (generated)
+isaac_sim/_deploy/

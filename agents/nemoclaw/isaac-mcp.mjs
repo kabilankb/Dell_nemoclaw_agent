@@ -127,6 +127,18 @@ async function buildTools(){
         backend:{ type:"string" }, checkpoint:{ type:"string" }, num_envs:{ type:"integer" } },
         required:["task"] } },
     { name:"close_sim", description:"Stop the running SIM and free the GPU.", inputSchema:{type:"object",properties:{}} },
+    { name:"duck_pipeline_start", description:"Start the AUTONOMOUS MicroDuck pipeline on the host: train -> quality gate (fall rate) -> auto-tune + retrain if it fails -> play (records a clip and exports ONNX) -> sim2real verify (single-file ONNX, 61->14, matches TorchScript, <64 MiB) -> copy to the real duck. It runs by itself for ~25-60 min; check it with duck_pipeline_status. Loading on the robot always waits for duck_deploy_confirm. skip_train=true deploys the best existing checkpoint (minutes, not an hour).",
+      inputSchema:{ type:"object", properties:{
+        task:{ type:"string", enum:["IsaacContrib-Velocity-Flat-MicroDuck","IsaacContrib-Velocity-Rough-MicroDuck"], description:"default flat" },
+        iterations:{ type:"integer", description:"training iterations per generation (default 1500)" },
+        max_generations:{ type:"integer", description:"train+tune attempts before giving up (default 2, max 4)" },
+        max_fall_rate:{ type:"number", description:"gate: highest acceptable fraction of episodes ending in a fall (default 0.25)" },
+        skip_train:{ type:"boolean", description:"deploy the best existing checkpoint without training" },
+        params:{ type:"object", description:"optional PPO knobs for the first generation (see tuning_guide)" } } } },
+    { name:"duck_pipeline_status", description:"State of the autonomous duck pipeline: status (running / awaiting_confirmation / done / deployed / failed / stopped), current stage, generation, live training numbers, gate result, verify checks, deploy bundle and robot. Use for any 'how is the duck doing / where is the pipeline' question.", inputSchema:{type:"object",properties:{}} },
+    { name:"duck_deploy_confirm", description:"Load the staged policy into the real duck's walk slot. ONLY call this after the user has said, in this conversation, that the duck is on its stand. Loading moves the motors.",
+      inputSchema:{ type:"object", properties:{ robot_on_stand:{ type:"boolean", description:"true only if the user confirmed the duck is on its stand" } }, required:["robot_on_stand"] } },
+    { name:"duck_pipeline_stop", description:"Stop the autonomous duck pipeline (and its GPU job), or cancel a staged deploy.", inputSchema:{type:"object",properties:{}} },
     { name:"stop_training", description:"Stop the running TRAINING/eval/play job (any GPU job) and free the GPU. Use for 'stop training', 'cancel the run', 'kill the job'.", inputSchema:{type:"object",properties:{}} },
   ];
 }
@@ -160,6 +172,21 @@ async function call(name, a){
                             log_tail: logObj && typeof logObj.lines==="string" ? logObj.lines.split(/\r?\n/).slice(-15).join("\n") : "" }, null, 2);
   }
   if (name==="close_sim" || name==="stop_training") return fetchCS("POST","/stop",{});
+  if (name==="duck_pipeline_start"){
+    const b={}; for (const k of ["task","iterations","max_generations","max_fall_rate","skip_train","params"]) if (a[k]!=null) b[k]=a[k];
+    return fetchCS("POST","/pipeline/start",b);
+  }
+  if (name==="duck_pipeline_status"){
+    // the server renders the reply card from real state; the model relays it verbatim
+    const raw = await fetchCS("GET","/pipeline");
+    try { const o = JSON.parse(raw); return JSON.stringify({ status:o.status, stage:o.stage, card:o.card }, null, 1); }
+    catch { return raw; }
+  }
+  if (name==="duck_deploy_confirm"){
+    const raw = await fetchCS("POST","/pipeline/deploy",{robot_on_stand: a.robot_on_stand===true});
+    try { const o = JSON.parse(raw); return o.card ? JSON.stringify({ status:o.status, card:o.card }) : raw; } catch { return raw; }
+  }
+  if (name==="duck_pipeline_stop") return fetchCS("POST","/pipeline/stop",{});
   if (name==="train_task"){
     const b={task:a.task};
     if(a.backend) b.backend=a.backend;

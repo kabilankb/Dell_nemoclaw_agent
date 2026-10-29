@@ -27,6 +27,7 @@
     color: var(--navy);
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { margin: 0; background: var(--bg); }
   body { min-height: 100vh; }
   a { color: inherit; }
@@ -151,6 +152,17 @@
   .steps { margin-top: 8px; display: grid; gap: 4px; font-size: 12.5px; color: var(--ink-soft); white-space: normal; }
   .steps div::before { content: "→ "; color: var(--muted); }
   .msg video { display: block; width: 100%; max-width: 420px; border-radius: 10px; margin-top: 10px; background: #000; }
+  .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 3px; }
+  .seg button { white-space: nowrap; border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; font-size: 13.5px; font-weight: 600; color: var(--muted); }
+  .seg button[aria-pressed="true"] { background: #fff; color: var(--navy); box-shadow: 0 1px 2px rgba(5,43,66,.12); }
+  .seg button:disabled { opacity: .45; cursor: default; }
+  .pipe { display: flex; gap: 6px; margin-top: 16px; flex-wrap: wrap; align-items: center; font-size: 12.5px; }
+  .pipe .lbl { font-weight: 600; color: var(--muted); margin-right: 4px; }
+  .pipe span.st { padding: 4px 10px; border-radius: 999px; background: var(--surface); color: var(--muted); border: 1px solid var(--line); }
+  .pipe span.st.ok { background: var(--lime-soft); color: var(--navy); border-color: #e4f5a8; }
+  .pipe span.st.now { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .pipe span.st.bad { background: #fdf0ef; color: var(--bad); border-color: #f3c9c5; }
+  .pipe .msg-l { flex-basis: 100%; color: var(--ink-soft); margin-top: 4px; }
   footer { text-align: center; font-size: 12.5px; color: var(--muted); padding: 0 16px 32px; }
 
   @media (max-width: 1000px) {
@@ -237,6 +249,7 @@
         </div>
         <svg class="spark" id="spark" viewBox="0 0 600 90" preserveAspectRatio="none" aria-label="Mean reward over iterations"></svg>
         <div class="err" id="t-err" hidden></div>
+        <div class="pipe" id="pipe" hidden></div>
         <div class="tools-row">
           <button class="btn btn-navy" id="btn-tune" title="The claw reads the curve and restarts the run with better settings">Tune it</button>
           <button class="btn btn-lime" id="btn-critique" title="Record a clip of the trained policy and ask Nemotron VL on Nebius">Critique the gait</button>
@@ -283,12 +296,23 @@
 
     <section class="card chat">
       <div class="card-h">
-        <div><h2>Claw</h2><div class="sub" id="chat-sub">NemoClaw sandbox · Nemotron 3 Super</div></div>
+        <div><h2 id="chat-title">Claw</h2><div class="sub" id="chat-sub">NemoClaw sandbox · Nemotron 3 Super</div></div>
+        <div class="seg" role="group" aria-label="Agent">
+          <button id="ag-claw" aria-pressed="true">Claw</button>
+          <button id="ag-pilot" aria-pressed="false" title="Hermes agent: trains, plays and deploys the duck by itself">Duck pilot</button>
+        </div>
       </div>
       <div class="msgs" id="msgs">
         <div class="msg bot">Hi! I drive Isaac Lab for you. Try "train the microduck on flat ground with a gui window", then ask how it's going.</div>
       </div>
-      <div class="quick">
+      <div class="quick" id="quick-pilot" hidden>
+        <button data-prompt="Run the full duck pipeline on flat ground: train, play, verify and deploy.">Full pipeline</button>
+        <button data-prompt="Ship the best duck policy we already have.">Ship best policy</button>
+        <button data-prompt="How is the duck doing?">How's the duck?</button>
+        <button data-prompt="The duck is on its stand, load it.">Duck is on its stand</button>
+        <button data-prompt="Stop the duck pipeline.">Stop</button>
+      </div>
+      <div class="quick" id="quick-claw">
         <button data-prompt="How's the training going?">How's it going?</button>
         <button data-prompt="Which robots can I train on this machine?">What can I train?</button>
         <button data-prompt="Play the microduck flat policy with a gui window.">Play policy</button>
@@ -342,8 +366,11 @@ async function refreshHealth() {
   $("chip-key").textContent = h.key_hint || "";
   $("chip-model").hidden = !inf.model;
   $("chip-model-t").textContent = name;
-  $("chat-sub").textContent = `NemoClaw sandbox "${h.sandbox_name}" · ` + (h.sandbox ? "running" : "stopped")
-    + (name ? ` · ${name}` : "");
+  pilotUp = h.pilot;
+  $("ag-pilot").disabled = !h.pilot;
+  $("chat-sub").textContent = agent === "pilot"
+    ? `Hermes sandbox "${h.pilot_name}" · ${h.pilot ? "running" : "stopped"} · train → play → sim2real`
+    : `NemoClaw sandbox "${h.sandbox_name}" · ` + (h.sandbox ? "running" : "stopped") + (name ? ` · ${name}` : "");
   if (h.viewer !== viewerUp) {
     viewerUp = h.viewer;
     const box = $("viewer");
@@ -568,9 +595,44 @@ async function runJob(path, payload, userText) {
   busy = false; $("send").disabled = false;
   refreshTraining(); refreshHealth(); refreshRuns();
 }
-// a fresh claw session per page load (reload the page to start over)
+// a fresh agent session per page load (reload the page to start over)
 const SESSION = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-const send = (text) => { text = (text || "").trim(); if (text) runJob("/api/chat", { message: text, session: SESSION }, text); };
+let agent = "claw", pilotUp = false;
+const send = (text) => { text = (text || "").trim(); if (text) runJob("/api/chat", { message: text, session: SESSION, agent }, text); };
+function setAgent(a) {
+  agent = a;
+  $("ag-claw").setAttribute("aria-pressed", a === "claw");
+  $("ag-pilot").setAttribute("aria-pressed", a === "pilot");
+  $("chat-title").textContent = a === "pilot" ? "Duck pilot" : "Claw";
+  $("quick-claw").hidden = a === "pilot"; $("quick-pilot").hidden = a !== "pilot";
+  $("input").placeholder = a === "pilot" ? "Ask the duck pilot…" : "Ask the claw…";
+  addMsg("bot", a === "pilot"
+    ? "Duck pilot here (Hermes on Nebius). I train the MicroDuck, gate it on the fall rate, retune if needed, record and export it, verify the ONNX, and deploy it to the duck. Try “run the full duck pipeline”."
+    : "Back to the claw. Ask me to train, play or tune any task.");
+  refreshHealth();
+}
+$("ag-claw").onclick = () => agent !== "claw" && setAgent("claw");
+$("ag-pilot").onclick = () => agent !== "pilot" && pilotUp && setAgent("pilot");
+
+const STAGES = ["train", "gate", "play", "export", "verify", "deploy"];
+async function refreshPipeline() {
+  let p;
+  try { p = await api("/api/pipeline"); } catch { return; }
+  const box = $("pipe");
+  if (!p.history || !p.history.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const seen = new Set(p.history.map((h) => h.stage === "tune" ? "gate" : h.stage === "stage" ? "deploy" : h.stage));
+  const failed = p.status === "failed", cur = p.stage === "tune" ? "gate" : p.stage === "stage" ? "deploy" : p.stage;
+  const gateFail = p.history.some((h) => h.stage === "gate" && h.passed === false) && !p.history.some((h) => h.passed === true);
+  const done = ["done", "deployed"].includes(p.status);
+  box.innerHTML = '<span class="lbl">Pipeline</span>' + STAGES.map((st) => {
+    let c = "";
+    if (st === cur && (failed || (st === "gate" && gateFail && p.status !== "running"))) c = "bad";
+    else if (st === cur && !done && p.status !== "stopped") c = "now";
+    else if (seen.has(st)) c = "ok";
+    return `<span class="st ${c}">${st}</span>`;
+  }).join("") + `<span class="msg-l">${esc(p.status)}${p.generation ? ` · gen ${p.generation}` : ""} — ${esc(p.history[p.history.length - 1].msg)}</span>`;
+}
 $("composer").onsubmit = (e) => { e.preventDefault(); const v = $("input").value; $("input").value = ""; send(v); };
 $("input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("composer").requestSubmit(); }
@@ -578,7 +640,8 @@ $("input").addEventListener("keydown", (e) => {
 document.querySelectorAll("[data-prompt]").forEach((b) => b.addEventListener("click", () => send(b.dataset.prompt)));
 $("btn-ask").onclick = () => $("input").focus();
 
-refreshHealth(); refreshTraining(); refreshKey(); refreshModels(); refreshRuns();
+refreshHealth(); refreshTraining(); refreshKey(); refreshModels(); refreshRuns(); refreshPipeline();
+setInterval(refreshPipeline, 3000);
 setInterval(refreshHealth, 3000);
 setInterval(refreshTraining, 2000);
 </script>

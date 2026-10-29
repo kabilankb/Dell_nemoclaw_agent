@@ -18,6 +18,7 @@ full Isaac control API:
     GET  /events?since=N  recent POSTs (tool calls) as they happen, for live UIs
     GET  /video/latest    newest play recording (mp4) from POST /record
     GET  /checkpoints?task=  trained runs of an Isaac Lab 3 task, most-trained first
+    GET  /pipeline        state of the autonomous train->gate->play->verify->deploy run
 
     POST /sim/launch      {scene?}            launch Isaac Sim headless on a scene
     POST /scene/load      {scene}             load a USD into the RUNNING sim (port 8226)
@@ -27,6 +28,9 @@ full Isaac control API:
     POST /play            {task, backend?, checkpoint?, num_envs?}
     POST /eval            {task, backend?, checkpoint?, num_envs?}
     POST /record          {task, checkpoint?, steps?}  headless play that records an mp4
+    POST /pipeline/start  {task?, iterations?, max_generations?, max_fall_rate?, skip_train?}
+    POST /pipeline/deploy {robot_on_stand: true}   load the staged policy on the duck
+    POST /pipeline/stop   {}
     POST /stop            {}                  stop the active GPU job
 
 Design rules carried over from the originals:
@@ -93,6 +97,9 @@ LAB3_LAUNCH = LAB_DIR / "scripts" / "isaaclab3_launch.py"
 # Viewer for gui=true runs: "viser" (web, shown in web/console) or "newton_gl" (desktop window).
 LAB3_VIZ = os.environ.get("ISAAC_LAB3_VIZ", "viser")
 VISER_PORT = int(os.environ.get("ISAAC_VISER_PORT", "8012"))
+# Isaac Lab 3 launches bootstrap Kit, which blocks on an interactive EULA prompt
+# unless this is set — and the pipeline thread launches without going through a handler.
+os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
 
 # Optional LD_PRELOAD fix carried from robot_lab (libgomp on aarch64). Set "" to skip.
 LD_PRELOAD = os.environ.get("ISAAC_LD_PRELOAD",
@@ -394,6 +401,42 @@ def latest_video():
     return max(vids, key=lambda p: p.stat().st_mtime) if vids else None
 
 
+def lab3_cmd(kind, task, body):
+    """argv for `isaaclab {train|play}` of an Isaac Lab 3 task, plus the overrides that
+    were applied / skipped (unknown knobs) and the task's known reward terms."""
+    gui = bool(body.get("gui"))
+    viz = body.get("viz") or LAB3_VIZ
+    verb = "train" if kind == "train" else "play"   # record = play + --video
+    cmd = [str(LAB3_PYTHON), str(LAB3_LAUNCH), verb, "--rl_library", "rsl_rl", f"--task={task}"]
+    default_envs = (64 if gui else 4096) if kind == "train" else (16 if gui else 4 if kind == "record" else 32)
+    cmd.append(f"--num_envs={body.get('num_envs', default_envs)}")
+    if gui:
+        cmd.append(f"--viz={viz}")
+    if kind == "train":
+        # Lab 3 defaults are huge (MicroDuck: 50000 its) — always bound the run.
+        cmd.append(f"--max_iterations={body.get('max_iterations', 1500)}")
+    if body.get("seed") is not None:
+        cmd.append(f"--seed={body['seed']}")
+    if kind != "train":
+        cmd.append(f"--checkpoint={resolve_checkpoint(task, body.get('checkpoint'))}")
+    elif body.get("checkpoint"):   # resume training from a checkpoint
+        cmd.append(f"--checkpoint={resolve_checkpoint(task, body.get('checkpoint'))}")
+    applied, skipped = list(ENV_BY_ID[task].get("default_overrides", [])), []
+    terms = known_reward_terms(task) if kind == "train" else None
+    if kind == "train":
+        for k, v in (body.get("params") or {}).items():
+            if k.startswith("reward_") and terms is not None and k[len("reward_"):] not in terms:
+                skipped.append(k)   # unknown term: Hydra would abort the whole run
+                continue
+            ov = knob_to_override(k, v)
+            (applied.append(ov) if ov else skipped.append(k))
+        applied += [str(ov) for ov in (body.get("overrides") or [])]
+    cmd += applied
+    if kind == "record":
+        cmd += ["--video", f"--video_length={int(body.get('steps', 300))}"]
+    return cmd, applied, skipped, terms
+
+
 # --------------------------------------------------------------------------- #
 # Running-sim bridge (python_server socket on 8226)
 # --------------------------------------------------------------------------- #
@@ -591,6 +634,258 @@ def resolve_open_spec(body):
 
 
 # --------------------------------------------------------------------------- #
+# Autonomous train -> gate -> play/export -> verify -> deploy pipeline
+# (driven by the duck-pilot agent; runs here so it outlives any agent turn)
+# --------------------------------------------------------------------------- #
+DEPLOY_DIR = CLAW_DIR / "isaac_sim" / "_deploy"
+VERIFY_SCRIPT = LAB_DIR / "scripts" / "verify_policy.py"
+# The physical robot. Unset DUCK_HOST = dry run: the bundle is built and verified,
+# and the exact deploy commands are written next to it instead of being run.
+DUCK_HOST = os.environ.get("DUCK_HOST", "")                 # e.g. microduck@192.168.1.50
+DUCK_POLICY_DIR = os.environ.get("DUCK_POLICY_DIR", "/home/microduck")
+DUCK_SLOT = os.environ.get("DUCK_POLICY_SLOT", "walk")
+
+PIPE = {"status": "idle"}
+_pipe_lock = threading.Lock()
+
+
+def _pipe_log(stage, msg, **extra):
+    PIPE.setdefault("history", []).append({"t": round(time.time()), "stage": stage, "msg": msg, **extra})
+    PIPE["stage"] = stage
+    print(f"[pipeline] {stage}: {msg}")
+
+
+def _wait_job(stop_check=lambda: False):
+    p = job["process"]
+    while p and p.poll() is None:
+        if PIPE.get("cancel") or stop_check():
+            return None
+        time.sleep(3)
+    return p.returncode if p else None
+
+
+def _ssh(args, timeout=60):
+    return subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", DUCK_HOST, *args],
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def _gate(m, cfg):
+    """Pass/fail on measured training outcomes, never on the reward alone."""
+    reasons = []
+    if not m or m.get("iteration") is None:
+        return False, ["no training metrics"]
+    if m.get("error"):
+        reasons.append("training crashed")
+    if m.get("fell_over") is None or m["fell_over"] > cfg["max_fall_rate"]:
+        reasons.append(f"fall rate {m.get('fell_over')} > {cfg['max_fall_rate']}")
+    if cfg.get("min_reward") is not None and (m.get("mean_reward") or -1e9) < cfg["min_reward"]:
+        reasons.append(f"mean reward {m.get('mean_reward')} < {cfg['min_reward']}")
+    return not reasons, reasons
+
+
+def _run_pipeline(cfg):
+    task = cfg["task"]
+    try:
+        ckpt = None
+        if cfg["skip_train"]:
+            runs = lab3_checkpoints(task)
+            if not runs:
+                raise RuntimeError("no trained checkpoint to deploy; run with training")
+            ckpt = runs[0]["checkpoint"]
+            _pipe_log("train", f"skipped — using best checkpoint {runs[0]['run']} (it {runs[0]['iteration']})")
+        else:
+            body = {"max_iterations": cfg["iterations"], "num_envs": cfg["num_envs"],
+                    "params": dict(cfg.get("params") or {})}
+            for gen in range(1, cfg["max_generations"] + 1):
+                PIPE["generation"] = gen
+                cmd, applied, skipped, _ = lab3_cmd("train", task, body)
+                info = start_job("train", task, cmd, str(LAB3_DIR))
+                PIPE["log_file"] = info["log_file"]
+                _pipe_log("train", f"generation {gen}: {body['max_iterations']} iterations"
+                          + (f", resumed from {Path(body['checkpoint']).parent.name}" if body.get("checkpoint") else "")
+                          + (f", overrides {applied}" if applied else ""))
+                rc = _wait_job()
+                if rc is None or rc < 0:   # cancelled, or /stop'ed (SIGTERM)
+                    raise InterruptedError("stopped")
+                m = parse_training_log(info["log_file"])
+                PIPE["metrics"] = {k: m.get(k) for k in ("iteration", "max_iterations", "mean_reward",
+                                                         "fell_over", "mean_episode_length", "finished")}
+                if rc != 0 or not m.get("finished"):
+                    raise RuntimeError(f"training exited with code {rc}"
+                                       + (f": {m['error'].splitlines()[-1]}" if m.get("error") else ""))
+                runs = [r for r in lab3_checkpoints(task) if r["mtime"] >= PIPE["started"]]
+                ckpt = (runs[0] if runs else lab3_checkpoints(task)[0])["checkpoint"]
+                ok, why = _gate(m, cfg)
+                _pipe_log("gate", ("PASS" if ok else "FAIL") + f" — reward {m.get('mean_reward')}, "
+                          f"fall rate {m.get('fell_over')}" + ("" if ok else f" ({'; '.join(why)})"),
+                          passed=ok)
+                if ok:
+                    break
+                if gen == cfg["max_generations"]:
+                    raise RuntimeError(f"gate still failing after {gen} generations: {'; '.join(why)}")
+                # self-improvement step: continue from this checkpoint, a bit more carefully
+                lr = float(body["params"].get("learning_rate", 1e-3)) * 0.7
+                body = {**body, "checkpoint": ckpt,
+                        "params": {**body["params"], "learning_rate": round(lr, 6)}}
+                _pipe_log("tune", f"resuming from {Path(ckpt).name} with learning_rate {lr:.2g}")
+        PIPE["checkpoint"] = ckpt
+
+        # play: headless rollout that records a clip AND exports policy.onnx next to the checkpoint
+        cmd = lab3_cmd("record", task, {"checkpoint": ckpt, "steps": cfg["record_steps"]})[0]
+        start_job("record", task, cmd, str(LAB3_DIR))
+        _pipe_log("play", f"recording {cfg['record_steps']} steps of {Path(ckpt).parent.name}/{Path(ckpt).name}")
+        rc = _wait_job()
+        if rc is None or rc < 0:
+            raise InterruptedError("stopped")
+        exported = Path(ckpt).parent / "exported"
+        if not (exported / "policy.onnx").exists():
+            raise RuntimeError("play did not export policy.onnx; see the record log")
+        v = latest_video()
+        PIPE["video"] = str(v) if v else None
+        _pipe_log("export", f"exported {exported}")
+
+        # verify: one self-contained ONNX, 61 -> 14, matches TorchScript, under 64 MiB
+        name = f"{task}_{time.strftime('%Y%m%d-%H%M%S')}"
+        bundle = DEPLOY_DIR / name
+        r = subprocess.run([str(LAB3_PYTHON), str(VERIFY_SCRIPT), str(exported), "--out", str(bundle)],
+                           capture_output=True, text=True, timeout=300)
+        try:
+            ver = json.loads(r.stdout.strip().splitlines()[-1])
+        except (IndexError, json.JSONDecodeError):
+            ver = {"ok": False, "error": (r.stderr or r.stdout)[-400:]}
+        PIPE["verify"] = ver
+        if not ver.get("ok"):
+            failed = [k for k, ok in (ver.get("checks") or {}).items() if not ok]
+            raise RuntimeError(f"verification failed: {failed or ver.get('error')}")
+        remote = f"{DUCK_POLICY_DIR}/{name}.onnx"
+        manifest = {"task": task, "checkpoint": ckpt, "metrics": PIPE.get("metrics"),
+                    "verify": ver, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "robot": DUCK_HOST or None, "remote_path": remote, "slot": DUCK_SLOT}
+        (bundle / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        host = DUCK_HOST or "microduck@ROBOT_HOST"
+        (bundle / "DEPLOY.md").write_text(
+            f"# Deploy {name}\n\nPut the duck on its stand first.\n\n```bash\n"
+            f"scp {bundle / 'policy.onnx'} {host}:{remote}\nssh {host} robotctl policy list\n"
+            f"ssh {host} sudo robotctl policy load {DUCK_SLOT} {remote}\nssh {host} robotctl monitor\n"
+            f"# roll back:\nssh {host} sudo robotctl policy reset {DUCK_SLOT}\n```\n")
+        PIPE["bundle"] = str(bundle)
+        _pipe_log("verify", f"all {len(ver['checks'])} checks passed — {ver['bytes'] // 1024} KB, "
+                  f"onnx vs torch diff {ver.get('onnx_vs_torch_max_diff')}")
+
+        # stage on the robot (copy only — loading moves motors, so a human confirms that)
+        if not DUCK_HOST:
+            PIPE["status"] = "done"
+            _pipe_log("deploy", "dry run — DUCK_HOST not set; bundle + DEPLOY.md written", dry_run=True)
+            return
+        r = subprocess.run(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                            str(bundle / "policy.onnx"), f"{DUCK_HOST}:{remote}"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            raise RuntimeError(f"scp to {DUCK_HOST} failed: {r.stderr.strip()[-300:]}")
+        r = _ssh(["robotctl", "policy", "list"])
+        PIPE["robot_policies"] = r.stdout.strip()[-800:]
+        PIPE["remote_path"] = remote
+        PIPE["status"] = "awaiting_confirmation"
+        _pipe_log("stage", f"copied to {DUCK_HOST}:{remote}; waiting for 'robot is on its stand' to load it")
+    except InterruptedError:
+        PIPE["status"] = "stopped"
+        _pipe_log(PIPE.get("stage", "?"), "stopped by request")
+    except Exception as e:
+        PIPE["status"] = "failed"
+        PIPE["error"] = str(e)
+        _pipe_log(PIPE.get("stage", "?"), f"FAILED: {e}")
+    finally:
+        if PIPE.get("status") == "running":
+            PIPE["status"] = "done"
+
+
+def pipeline_load():
+    """Load the staged policy into the robot's slot (after a human confirmed the stand)."""
+    r = _ssh(["sudo", "-n", "robotctl", "policy", "load", DUCK_SLOT, PIPE["remote_path"]], timeout=90)
+    if r.returncode != 0:
+        raise RuntimeError(f"robotctl policy load failed: {(r.stderr or r.stdout).strip()[-300:]}")
+    PIPE["robot_policies"] = _ssh(["robotctl", "policy", "list"]).stdout.strip()[-800:]
+    PIPE["status"] = "deployed"
+    _pipe_log("deploy", f"loaded into slot '{DUCK_SLOT}' on {DUCK_HOST}; "
+              f"roll back with: sudo robotctl policy reset {DUCK_SLOT}")
+
+
+_STATE_WORD = {"train": "Training", "gate": "Gating", "tune": "Tuning", "play": "Playing",
+               "export": "Exporting", "verify": "Verifying", "stage": "Staging", "deploy": "Deploying"}
+
+
+def pipeline_card(v):
+    """The reply the agent relays verbatim: built from real state, so it can't invent
+    progress, and only lists what has actually happened."""
+    st, cfg = v.get("status", "idle"), v.get("config") or {}
+    if st == "idle":
+        return ("**MicroDuck** — Idle\n\nNo pipeline has run since the control server started.\n\n"
+                "Next: say “run the duck pipeline” to train, play, verify and deploy.")
+    terrain = "rough" if "Rough" in (v.get("task") or "") else "flat"
+    hist = v.get("history") or []
+    word = {"awaiting_confirmation": "Staged on the robot", "deployed": "Deployed", "failed": "Failed",
+            "stopped": "Stopped"}.get(st) or ("Done (dry run)" if st == "done" and not DUCK_HOST
+                                              else "Done" if st == "done"
+                                              else _STATE_WORD.get(v.get("stage"), "Running"))
+    lines = [f"**MicroDuck · {terrain}** — {word}", ""]
+    live, m = v.get("live"), v.get("metrics")
+    if live and live.get("iteration") is not None:
+        lines.append(f"Progress   {live['iteration'] + 1}/{live['max_iterations']} · gen "
+                     f"{v.get('generation', 1)}/{cfg.get('max_generations', 1)}"
+                     + (f" · ETA {live['eta']}" if live.get("eta") else ""))
+    src = live if live and live.get("mean_reward") is not None else m
+    if src and src.get("mean_reward") is not None:
+        lines.append(f"Reward     {src['mean_reward']:.2f}"
+                     + (f" · Falls {round(src['fell_over'] * 100)}%" if src.get("fell_over") is not None else ""))
+    if v.get("checkpoint"):
+        ck = Path(v["checkpoint"])
+        lines.append(f"Policy     {ck.parent.name} · iteration {ck.stem.split('_')[-1]}"
+                     + (" (best existing)" if cfg.get("skip_train") else ""))
+    gates = [h for h in hist if h["stage"] == "gate"]
+    if gates:
+        g = gates[-1]
+        lines.append("Gate       " + ("✅ passed" if g.get("passed") else "❌ " + g["msg"].split("(", 1)[-1].rstrip(")"))
+                     + (f" (after {len(gates)} generations)" if len(gates) > 1 and g.get("passed") else ""))
+    ver = v.get("verify")
+    if ver and ver.get("ok"):
+        d = ver.get("onnx_vs_torch_max_diff")
+        lines.append(f"Verify     ✅ {len(ver['checks'])}/{len(ver['checks'])} checks · "
+                     f"{ver['bytes'] // 1024} KB · 61→14" + (f" · Δ onnx/torch {d:.0e}" if d is not None else ""))
+    if v.get("bundle") and st in ("done", "awaiting_confirmation", "deployed"):
+        lines.append(f"Bundle     {Path(v['bundle']).relative_to(CLAW_DIR)}")
+    lines.append(f"Robot      {DUCK_HOST or 'not configured (dry run)'}")
+    lines.append("")
+    if st == "failed":
+        lines.append(f"Why: {v.get('error', 'unknown error')}")
+    nxt = {
+        "awaiting_confirmation": "put the duck on its stand and tell me — then I load it into the walk slot.",
+        "deployed": f"watch it with `robotctl monitor`; roll back with `sudo robotctl policy reset {DUCK_SLOT}`.",
+        "stopped": "say “run the duck pipeline” to start again.",
+        "done": ("set DUCK_HOST=microduck@<ip> in ~/.openclaw/.env, restart with ./demo.sh up, and ship again "
+                 "to put it on the robot.") if not DUCK_HOST else "the policy is on the robot.",
+    }.get(st)
+    if st == "failed":
+        nxt = ("train longer (e.g. 3000 iterations) or relax max_fall_rate, then run again."
+               if v.get("stage") in ("gate", "tune") else "fix the error above, then run again.")
+    if st == "running":
+        nxt = ("when training ends I check the fall rate, then play, export and verify the policy."
+               if v.get("stage") in ("train", "gate", "tune")
+               else "then I verify the ONNX and get it ready for the robot.")
+    lines.append(f"Next: {nxt}")
+    return "\n".join(lines)
+
+
+def pipeline_view():
+    out = {k: v for k, v in PIPE.items() if k not in ("cancel",)}
+    if PIPE.get("status") == "running" and job_running() and job["kind"] == "train" and PIPE.get("log_file"):
+        m = parse_training_log(PIPE["log_file"])
+        out["live"] = {k: m.get(k) for k in ("iteration", "max_iterations", "mean_reward", "fell_over", "eta")}
+    out["robot"] = DUCK_HOST or None
+    out["card"] = pipeline_card(out)
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # HTTP handler
 # --------------------------------------------------------------------------- #
 class Handler(BaseHTTPRequestHandler):
@@ -630,6 +925,8 @@ class Handler(BaseHTTPRequestHandler):
             if running and job["start_time"]:
                 out["elapsed_seconds"] = round(time.time() - job["start_time"])
             self._respond(200, out)
+        elif path == "/pipeline":
+            self._respond(200, pipeline_view())
         elif path == "/checkpoints":
             self._respond(200, {"task": q.get("task"), "runs": lab3_checkpoints(q.get("task"))[:20]})
         elif path == "/runs":
@@ -717,6 +1014,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._rl(self.path.lstrip("/"), body)
         if self.path == "/record":
             return self._record(body)
+        if self.path == "/pipeline/start":
+            return self._pipeline_start(body)
+        if self.path == "/pipeline/stop":
+            return self._pipeline_stop()
+        if self.path == "/pipeline/deploy":
+            return self._pipeline_deploy(body)
         if self.path == "/stop":
             return self._stop()
         self._respond(404, {"error": f"unknown POST {self.path}"})
@@ -898,32 +1201,7 @@ class Handler(BaseHTTPRequestHandler):
                                        "hint": "set ISAAC_LAB3_DIR to an Isaac Lab 3 uv checkout"})
         gui = bool(body.get("gui"))
         viz = body.get("viz") or LAB3_VIZ
-        verb = "train" if kind == "train" else "play"
-        cmd = [str(LAB3_PYTHON), str(LAB3_LAUNCH), verb, "--rl_library", "rsl_rl", f"--task={task}"]
-        default_envs = (64 if gui else 4096) if kind == "train" else (16 if gui else 32)
-        cmd.append(f"--num_envs={body.get('num_envs', default_envs)}")
-        if gui:
-            cmd.append(f"--viz={viz}")
-        if kind == "train":
-            # Lab 3 defaults are huge (MicroDuck: 50000 its) — always bound the run.
-            cmd.append(f"--max_iterations={body.get('max_iterations', 1500)}")
-        if body.get("seed") is not None:
-            cmd.append(f"--seed={body['seed']}")
-        if kind != "train":
-            cmd.append(f"--checkpoint={resolve_checkpoint(task, body.get('checkpoint'))}")
-        elif body.get("checkpoint"):   # resume training from a checkpoint
-            cmd.append(f"--checkpoint={resolve_checkpoint(task, body.get('checkpoint'))}")
-        applied, skipped = list(ENV_BY_ID[task].get("default_overrides", [])), []
-        terms = known_reward_terms(task) if kind == "train" else None
-        if kind == "train":
-            for k, v in (body.get("params") or {}).items():
-                if k.startswith("reward_") and terms is not None and k[len("reward_"):] not in terms:
-                    skipped.append(k)   # unknown term: Hydra would abort the whole run
-                    continue
-                ov = knob_to_override(k, v)
-                (applied.append(ov) if ov else skipped.append(k))
-            applied += [str(ov) for ov in (body.get("overrides") or [])]
-        cmd += applied
+        cmd, applied, skipped, terms = lab3_cmd(kind, task, body)
         os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
         info = start_job(kind, task, cmd, str(LAB3_DIR))
         info["launcher"] = "isaaclab3"
@@ -949,16 +1227,61 @@ class Handler(BaseHTTPRequestHandler):
             return self._respond(400, {"error": "recording needs an Isaac Lab 3 task",
                                        "valid": [e["id"] for e in ENVIRONMENTS
                                                  if e.get("launcher") == "isaaclab3"]})
-        steps = int(body.get("steps", 300))
-        cmd = [str(LAB3_PYTHON), str(LAB3_LAUNCH), "play", "--rl_library", "rsl_rl",
-               f"--task={task}", f"--num_envs={body.get('num_envs', 4)}",
-               f"--checkpoint={resolve_checkpoint(task, body.get('checkpoint'))}",
-               "--video", f"--video_length={steps}"]
-        cmd += list(ENV_BY_ID[task].get("default_overrides", []))
+        cmd = lab3_cmd("record", task, body)[0]
         os.environ.setdefault("OMNI_KIT_ACCEPT_EULA", "YES")
         info = start_job("record", task, cmd, str(LAB3_DIR))
         info["video_url"] = "/video/latest"
         self._respond(200, info)
+
+    def _pipeline_start(self, body):
+        task = body.get("task") or "IsaacContrib-Velocity-Flat-MicroDuck"
+        if ENV_BY_ID.get(task, {}).get("launcher") != "isaaclab3":
+            return self._respond(400, {"error": f"the pipeline needs an Isaac Lab 3 task, not {task}"})
+        with _pipe_lock:
+            if PIPE.get("status") in ("running", "awaiting_confirmation"):
+                return self._respond(409, {"error": f"a pipeline is already {PIPE['status']}",
+                                           "stage": PIPE.get("stage")})
+            if not self._guard_gpu():
+                return
+            cfg = {"task": task,
+                   "iterations": int(body.get("iterations", 1500)),
+                   "num_envs": int(body.get("num_envs", 4096)),
+                   "max_generations": max(1, min(int(body.get("max_generations", 2)), 4)),
+                   "max_fall_rate": float(body.get("max_fall_rate", 0.25)),
+                   "min_reward": body.get("min_reward"),
+                   "record_steps": int(body.get("record_steps", 300)),
+                   "skip_train": bool(body.get("skip_train")),
+                   "params": body.get("params") or {}}
+            PIPE.clear()
+            PIPE.update(status="running", config=cfg, task=task, started=time.time(), history=[])
+            threading.Thread(target=_run_pipeline, args=(cfg,), daemon=True).start()
+        time.sleep(1.5)   # let the first stage register so the card shows where it is
+        self._respond(200, {"status": "started", "card": pipeline_card(pipeline_view())})
+
+    def _pipeline_stop(self):
+        if PIPE.get("status") not in ("running", "awaiting_confirmation"):
+            return self._respond(200, {"status": PIPE.get("status", "idle")})
+        PIPE["cancel"] = True
+        self._stop_job_inline()
+        if PIPE["status"] == "awaiting_confirmation":
+            PIPE["status"] = "stopped"
+            _pipe_log("deploy", "cancelled before loading on the robot")
+        self._respond(200, {"status": "stopping"})
+
+    def _pipeline_deploy(self, body):
+        if PIPE.get("status") != "awaiting_confirmation":
+            return self._respond(409, {"error": f"nothing staged (pipeline is {PIPE.get('status', 'idle')})"})
+        if body.get("robot_on_stand") is not True:
+            return self._respond(400, {"error": "confirm the duck is on its stand (robot_on_stand=true) "
+                                                "— loading a policy moves the motors"})
+        try:
+            pipeline_load()
+        except Exception as e:
+            PIPE["status"] = "failed"
+            PIPE["error"] = str(e)
+            _pipe_log("deploy", f"FAILED: {e}")
+            return self._respond(502, {"error": str(e)})
+        self._respond(200, pipeline_view())
 
     def _stop(self):
         if not job_running():

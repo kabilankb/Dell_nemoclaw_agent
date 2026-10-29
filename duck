@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""The MicroDuck sim-to-real workflow from a terminal (no browser needed).
+
+  ./duck run [-n 1500] [--tries 2] [--max-fall 0.25] [--rough]
+                         train → gate → tune → play → verify → deploy, then watch it
+  ./duck ship [--rough]  skip training: best checkpoint → play → verify → deploy
+  ./duck status          the status card
+  ./duck watch           live card until the run finishes or needs you
+  ./duck deploy          load the staged policy on the duck (asks: is it on its stand?)
+  ./duck stop            stop the run / cancel a staged deploy
+  ./duck history         every pipeline step with times
+  ./duck ask "…"         one message to the Hermes duck-pilot agent (Nemotron on Nebius)
+  ./duck chat            talk to the duck-pilot agent until you type exit
+
+run/ship/status/watch/deploy/stop talk to the control server directly (:5561);
+ask/chat go through the agent in the `duckpilot` NemoClaw sandbox. Start the stack
+first with ./demo.sh up.
+"""
+import argparse
+import base64
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+CONTROL = os.environ.get("ISAAC_CONTROL_URL", f"http://127.0.0.1:{os.environ.get('ISAAC_CONTROL_PORT', '5561')}")
+PILOT = os.environ.get("DUCKPILOT_SANDBOX", "duckpilot")
+FLAT, ROUGH = "IsaacContrib-Velocity-Flat-MicroDuck", "IsaacContrib-Velocity-Rough-MicroDuck"
+STAGES = ["train", "gate", "play", "export", "verify", "deploy"]
+FINAL = ("done", "failed", "stopped", "idle", "awaiting_confirmation")
+TTY = sys.stdout.isatty()
+
+
+def c(code, s):
+    return f"\033[{code}m{s}\033[0m" if TTY else s
+
+
+def call(method, path, body=None, timeout=30):
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(CONTROL + path, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            return json.load(e)
+        except ValueError:
+            return {"error": f"HTTP {e.code}"}
+    except (urllib.error.URLError, OSError):
+        sys.exit(c("31", "✗ control server is not running") + f" ({CONTROL}) — start it with ./demo.sh up")
+
+
+def render(card):
+    """Card markdown → terminal: **bold** → bold, labels dimmed."""
+    out = []
+    for line in (card or "").splitlines():
+        line = re.sub(r"\*\*(.+?)\*\*", lambda m: c("1", m.group(1)), line)
+        m = re.match(r"^([A-Z][a-z]+)( {2,})(.*)$", line)
+        if m:
+            line = c("2", m.group(1)) + m.group(2) + m.group(3)
+        elif line.startswith(("Next:", "Why:")):
+            k, rest = line.split(":", 1)
+            line = c("36", k + ":") + rest
+        out.append("  " + line)
+    return "\n".join(out)
+
+
+def strip(view):
+    """train ✓ ─ gate ● ─ play · … for the current stage."""
+    stage, status = view.get("stage"), view.get("status")
+    seen = {h.get("stage") for h in view.get("history", [])}
+    parts = []
+    for st in STAGES:
+        if st == stage and status == "running":
+            parts.append(c("33", f"{st} ●"))
+        elif st == stage and status == "failed":
+            parts.append(c("31", f"{st} ✗"))
+        elif st == stage and status == "stopped":
+            parts.append(c("33", f"{st} ■"))
+        elif st in seen:
+            parts.append(c("32", f"{st} ✓"))
+        else:
+            parts.append(c("2", f"{st} ·"))
+    return "  " + c("2", " ─ ").join(parts)
+
+
+def show(view):
+    if view.get("error") and not view.get("card"):
+        print(c("31", "  ✗ " + view["error"]))
+        return
+    print(strip(view) + "\n")
+    print(render(view.get("card")))
+
+
+def watch(every=5):
+    last = None
+    try:
+        while True:
+            view = call("GET", "/pipeline")
+            key = (view.get("card"), view.get("stage"), view.get("status"))
+            if key != last:
+                if TTY and last is not None:
+                    print("\033[2J\033[H", end="")
+                print(c("2", time.strftime("%H:%M:%S")) + "\n")
+                show(view)
+                last = key
+            if view.get("status") in FINAL:
+                if view.get("status") == "awaiting_confirmation":
+                    print("\n  " + c("33", "Waiting for you:") + " put the duck on its stand, then ./duck deploy")
+                return
+            time.sleep(every)
+    except KeyboardInterrupt:
+        print("\n  " + c("2", "(stopped watching — the run keeps going; ./duck watch to resume)"))
+
+
+def cmd_run(a, skip=False):
+    body = {"task": ROUGH if a.rough else FLAT, "skip_train": skip}
+    if not skip:
+        body.update(iterations=a.iterations, max_generations=a.tries, max_fall_rate=a.max_fall)
+    r = call("POST", "/pipeline/start", body)
+    if "error" in r:
+        print(c("31", "  ✗ " + r["error"]))
+        if "already" in r["error"]:
+            print("  " + c("36", "Next:") + " ./duck watch, or ./duck stop first")
+        return 1
+    if a.no_watch:
+        show(call("GET", "/pipeline"))
+    else:
+        watch()
+
+
+def cmd_deploy(a):
+    view = call("GET", "/pipeline")
+    if view.get("status") != "awaiting_confirmation":
+        print(c("31", f"  ✗ nothing staged (pipeline is {view.get('status', 'idle')})"))
+        return 1
+    print(render(view.get("card")) + "\n")
+    if not a.on_stand:
+        ans = input(f"  Loading moves 14 servos on {view.get('robot')}. Is the duck on its stand? [y/N] ")
+        if ans.strip().lower() not in ("y", "yes"):
+            print("  Not loaded.")
+            return 1
+    show(call("POST", "/pipeline/deploy", {"robot_on_stand": True}, timeout=120))
+
+
+def cmd_history(_a):
+    view = call("GET", "/pipeline")
+    hist = view.get("history") or []
+    if not hist:
+        print("  no pipeline has run since the control server started")
+    for h in hist:
+        print(f"  {c('2', time.strftime('%H:%M:%S', time.localtime(h['t'])))}  {h['stage']:<7} {h['msg']}")
+
+
+def pilot(message, session):
+    exe = shutil.which("nemohermes") or shutil.which("nemoclaw") \
+        or next((p for p in (os.path.expanduser("~/.local/bin/nemohermes"),) if os.path.exists(p)), None)
+    if not exe:
+        return c("31", "✗ nemohermes CLI not found")
+    b64 = base64.b64encode(message.encode()).decode()
+    inner = (f"cd /sandbox && echo {b64} | base64 -d > /tmp/_pilot_{session} && "
+             f"HOME=/sandbox HERMES_HOME=/sandbox/.hermes hermes chat -Q --yolo -s duck-pilot "
+             f"--continue {session} --create-if-missing --query-file /tmp/_pilot_{session}")
+    env = dict(os.environ, NEMOCLAW_GATEWAY_PORT=os.environ.get("NEMOCLAW_GATEWAY_PORT", "8090"))
+    p = subprocess.run([exe, PILOT, "exec", "--no-tty", "--timeout", "300", "--", "bash", "-lc", inner],
+                       capture_output=True, text=True, env=env)
+    lines = [l for l in p.stdout.splitlines() if not re.match(r"^\s*(Warning:|⚠|session_id:)", l)]
+    reply = "\n".join(lines).strip()
+    if not reply:
+        tail = (p.stderr or p.stdout).strip().splitlines()[-3:]
+        return c("31", "✗ no reply from the duck pilot") + "\n  " + "\n  ".join(tail) + \
+            "\n  " + c("36", "Next:") + f" ./demo.sh status (is {PILOT} up?)"
+    return render(reply.strip("`\n"))
+
+
+def busy(msg=""):
+    """Show (or clear) a one-line 'working' note; only on a terminal."""
+    if TTY:
+        print("\033[2K\r" + (c("2", "  " + msg) if msg else ""), end="", flush=True)
+
+
+def cmd_ask(a):
+    sess = a.session or "terminal"
+    t0 = time.time()
+    busy("duck pilot is thinking…")
+    out = pilot(" ".join(a.message), sess)
+    busy()
+    print(out + "\n" + c("2", f"  ({time.time() - t0:.0f}s)"))
+
+
+def cmd_chat(a):
+    sess = a.session or f"terminal-{int(time.time())}"
+    print(c("1", "  Duck pilot") + c("2", f" · Hermes on Nebius · session {sess} · 'exit' to quit"))
+    print(c("2", "  try: how is the duck doing? · ship the best policy · run the pipeline with 40 iterations\n"))
+    while True:
+        try:
+            msg = input(c("36", "you ▸ ")).strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if msg.lower() in ("exit", "quit", ":q"):
+            return
+        if not msg:
+            continue
+        t0 = time.time()
+        busy("thinking…")
+        out = pilot(msg, sess)
+        busy()
+        print(out + "\n" + c("2", f"  ({time.time() - t0:.0f}s)") + "\n")
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="duck", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd")
+    r = sub.add_parser("run", help="full pipeline: train → gate → tune → play → verify → deploy")
+    r.add_argument("-n", "--iterations", type=int, default=1500)
+    r.add_argument("--tries", type=int, default=2, help="generations (train + tune retries), max 4")
+    r.add_argument("--max-fall", type=float, default=0.25, help="gate: max share of episodes that fall")
+    r.add_argument("--rough", action="store_true", help="rough terrain task")
+    r.add_argument("--no-watch", action="store_true")
+    s = sub.add_parser("ship", help="best existing checkpoint → play → verify → deploy")
+    s.add_argument("--rough", action="store_true")
+    s.add_argument("--no-watch", action="store_true")
+    sub.add_parser("status", help="the status card")
+    sub.add_parser("watch", help="live card until done or waiting for you")
+    d = sub.add_parser("deploy", help="load the staged policy on the duck")
+    d.add_argument("--on-stand", action="store_true", help="skip the prompt: the duck is on its stand")
+    sub.add_parser("stop", help="stop the run / cancel a staged deploy")
+    sub.add_parser("history", help="every pipeline step with times")
+    k = sub.add_parser("ask", help="one message to the duck-pilot agent")
+    k.add_argument("message", nargs="+")
+    k.add_argument("--session")
+    ch = sub.add_parser("chat", help="talk to the duck-pilot agent")
+    ch.add_argument("--session")
+    a = ap.parse_args()
+
+    if a.cmd == "run":
+        return cmd_run(a)
+    if a.cmd == "ship":
+        return cmd_run(a, skip=True)
+    if a.cmd == "watch":
+        return watch()
+    if a.cmd == "deploy":
+        return cmd_deploy(a)
+    if a.cmd == "stop":
+        call("POST", "/pipeline/stop", {})
+        return show(call("GET", "/pipeline"))
+    if a.cmd == "history":
+        return cmd_history(a)
+    if a.cmd == "ask":
+        return cmd_ask(a)
+    if a.cmd == "chat":
+        return cmd_chat(a)
+    show(call("GET", "/pipeline"))   # default: status
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

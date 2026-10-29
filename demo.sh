@@ -8,6 +8,7 @@
 #   ./demo.sh check                    pre-flight: key, model, GPU memory, ports, checkpoints
 #   ./demo.sh status                   one line per service
 #   ./demo.sh down                     stop the console, control server, any GPU job, sandbox
+#   ./duck run | ship | watch | chat   the duck sim-to-real workflow in the terminal (./duck -h)
 #
 # Settings live next to the key in ~/.openclaw/.env (all optional except the key):
 #   NEBIUS_API_KEY=…                   Token Factory key
@@ -210,7 +211,7 @@ case "$cmd" in
     fi
     start_bg console "$CONSOLE_PORT" python3 "$HERE/web/console_server.py"
     echo
-    echo "Open http://localhost:$CONSOLE_PORT"
+    echo "Open http://localhost:$CONSOLE_PORT   (or in the terminal: ./duck -h)"
     ;;
   down)
     stop_port console "$CONSOLE_PORT"

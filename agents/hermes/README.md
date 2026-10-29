@@ -70,12 +70,20 @@ Robot      not configured (dry run)
 Next: set DUCK_HOST=microduck@<ip> in ~/.openclaw/.env, restart with ./demo.sh up, and ship again to put it on the robot.
 ```
 
-From a terminal:
+From a terminal — `./duck` at the repo root (same cards, no browser):
 
 ```bash
-nemohermes duckpilot exec --no-tty -- bash -lc \
-  'HOME=/sandbox HERMES_HOME=/sandbox/.hermes hermes chat -Q -s duck-pilot -q "how is the duck doing?"'
+./duck run -n 1500 --tries 2      # full pipeline, then a live card until it finishes
+./duck ship                       # best checkpoint → play → verify → deploy (~1 min)
+./duck status | watch | history   # card · live card · every step with times
+./duck deploy                     # asks "is the duck on its stand?" before loading
+./duck stop
+./duck ask "how is the duck doing?"   # one message to the Hermes agent
+./duck chat                           # talk to it until you type exit
 ```
+
+`run/ship/status/watch/deploy/stop` call the control server directly; `ask/chat` go
+through the Hermes agent in the sandbox.
 
 ## Files
 
